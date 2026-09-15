@@ -371,7 +371,7 @@ def _yahoo_gc_quote():
     return None, None
 
 
-_anchor_mem = {"offset": 0.0, "t": 0.0}
+_anchor_mem = {"offset": 0.0, "t": 0.0, "ema": None, "last_ts": None}
 _frozen_mem = {"price": None}
 
 
@@ -448,6 +448,7 @@ def tick_spot(max_age=0.8):
     #    follows the live book instead of trailing the slow spot feed.
     wm, _wt = wsfeed.mid(max_age=30)
     if wm:
+        matched_ts = None
         anchor_target = None
         if spot and spot.get("updatedAt"):
             ts = _feed_epoch(spot["updatedAt"])
@@ -455,12 +456,22 @@ def tick_spot(max_age=0.8):
                 m_then = wsfeed.mid_at(ts)
                 if m_then:
                     anchor_target = spot["price"] - m_then
+                    matched_ts = ts
         if anchor_target is None and spot:
             anchor_target = spot["price"] - wm
         if anchor_target is None and q and basis_ok:
             anchor_target = (q - _basis_mem["value"]) - wm
         if anchor_target is not None and abs(anchor_target) <= 8.0:
-            _anchor_mem.update(offset=anchor_target, t=now)
+            if matched_ts is not None and matched_ts != _anchor_mem.get("last_ts"):
+                # new timestamp-matched premium sample -> smooth across the
+                # slow (~30s) gold-api steps so the level doesn't wobble
+                prev = _anchor_mem.get("ema")
+                ema = anchor_target if prev is None else 0.7 * prev + 0.3 * anchor_target
+                _anchor_mem.update(offset=ema, ema=ema, t=now, last_ts=matched_ts)
+            elif matched_ts is None:
+                _anchor_mem.update(offset=anchor_target, t=now)
+                if _anchor_mem.get("ema") is None:
+                    _anchor_mem["ema"] = anchor_target
         off = _anchor_mem["offset"]
         if abs(off) <= 8.0:
             price, src = round(wm + off, 2), "realtime feed"

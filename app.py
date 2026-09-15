@@ -344,7 +344,41 @@ def update_trade_tracker():
             STATE["alerts"].insert(0, a)
             del STATE["alerts"][100:]
             _save_state()
-        _notify(("✅ " if typ in ("TP1_HIT", "TP2_HIT") else "🛑 " if typ == "SL_HIT" else "⏱ ") + a["msg"])
+        # phone: result card in the same style as the A+ signal card
+        icon = {"TP1_HIT": "✅", "TP2_HIT": "🎯", "SL_HIT": "🛑",
+                "BE_STOP": "⚖️", "TIMEOUT": "⏱"}.get(typ, "•")
+        head = {"TP1_HIT": "TP1 HIT", "TP2_HIT": "TP2 HIT", "SL_HIT": "SL HIT",
+                "BE_STOP": "BREAKEVEN STOP", "TIMEOUT": "TIMEOUT · 5h"}.get(typ, typ)
+        ent_p, sl_p, tp1_p, tp2_p = tr["entry"], tr["sl"], tr["tp1"], tr["tp2"]
+        if typ == "TP1_HIT":
+            body = (f"🎯 Entry: {ent_p:,.2f}\n"
+                    f"✅ TP1 reached: {tp1_p:,.2f} (+1.0R banked)\n"
+                    f"🛑 SL moved to breakeven {ent_p:,.2f}\n"
+                    f"🎯 TP2 runner: {tp2_p:,.2f}\n\n"
+                    f"⭐ Half position closed")
+        elif typ == "TP2_HIT":
+            body = (f"🎯 Entry: {ent_p:,.2f}\n"
+                    f"✅ TP1: {tp1_p:,.2f} (+1.0R)\n"
+                    f"🎯 TP2: {tp2_p:,.2f} (+1.5R runner)\n\n"
+                    f"⭐ Trade closed · Total +2.5R 🎉")
+        elif typ == "SL_HIT":
+            body = (f"🎯 Entry: {ent_p:,.2f}\n"
+                    f"🛑 SL: {sl_p:,.2f} (-1.0R)\n\n"
+                    f"⭐ Trade closed · next setup will come — patience")
+        elif typ == "BE_STOP":
+            body = (f"🎯 Entry: {ent_p:,.2f}\n"
+                    f"✅ TP1 banked: {tp1_p:,.2f} (+1.0R)\n"
+                    f"⚖️ Runner stopped at breakeven {ent_p:,.2f}\n\n"
+                    f"⭐ Trade closed · Total +1.0R")
+        else:  # TIMEOUT
+            r = tr.get("r") or 0.0
+            body = (f"🎯 Entry: {ent_p:,.2f}\n"
+                    f"💰 Closed at market: {tr.get('closePrice', price):,.2f}\n\n"
+                    f"⭐ Trade closed · Total {r:+.2f}R")
+        _notify(f"{icon} A+ {tr_dir} — {head}\n\n"
+                f"📊 Timeframe: 15M\n"
+                f"💰 Symbol: XAUUSD\n\n"
+                f"{body}")
 
 
 def check_price_alerts(prev, new):

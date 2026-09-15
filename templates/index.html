@@ -306,7 +306,7 @@ const INITIAL = {{ payload|tojson }};
   }));
 
   const state = { tf: '60m', data: null, lastAlertId: 0, sound: false, ready: false,
-                  hover: null, dispPrice: null, refPrice: null,
+                  hover: null, dispPrice: null, refPrice: null, lastTickT: 0,
                   entry: null, entryStats: null };
   let audioCtx = null, pollTimer = null, entryTimer = null;
   const TF_SEC = {'15m': 900, '60m': 3600, '1d': 86400};
@@ -364,6 +364,7 @@ const INITIAL = {{ payload|tojson }};
 
   function applyTick(p, src, tsec){
     const d = state.data;
+    state.lastTickT = tsec || Math.floor(Date.now() / 1000);
     if(!d || !d.candles || !d.candles.length) return;
     let last = d.candles[d.candles.length - 1];
     if(Math.abs(p - last.c) > 15) return;              // glitch guard
@@ -623,12 +624,16 @@ const INITIAL = {{ payload|tojson }};
   function render(){
     const d = state.data; if(!d) return;
 
-    $('price').textContent = fmtP(d.price);
-    state.dispPrice = d.price;
+    // payload price vs live tick: keep whichever is FRESHER (the periodic
+    // reload must never drag the price display back to a stale sample)
     state.refPrice = d.price - d.chg;
-    const up = d.chg >= 0;
-    $('chg').textContent = (up ? '▲ ' : '▼ ') + fmtP(Math.abs(d.chg)) +
-      ' (' + (up ? '+' : '') + d.chgPct.toFixed(2) + '%)';
+    const tickNewer = state.lastTickT && (state.lastTickT + 1 >= d.fetchedAt);
+    const showP = (tickNewer && state.dispPrice != null) ? state.dispPrice : d.price;
+    if(!tickNewer || state.dispPrice == null) state.dispPrice = d.price;
+    $('price').textContent = fmtP(showP);
+    const chgV = showP - state.refPrice, up = chgV >= 0;
+    $('chg').textContent = (up ? '▲ ' : '▼ ') + fmtP(Math.abs(chgV)) +
+      ' (' + (up ? '+' : '') + (chgV / state.refPrice * 100).toFixed(2) + '%)';
     $('chg').className = 'chg mono ' + (up ? 'up' : 'down');
     let srcTxt = (d.stale ? 'cached' : 'live') + ' · ' + d.source;
     if(d.spot){ srcTxt += ' · spot $' + fmtP(d.spot.price); }

@@ -374,6 +374,15 @@ def _yahoo_gc_quote():
 _anchor_mem = {"offset": 0.0, "t": 0.0}
 _frozen_mem = {"price": None}
 
+
+def _feed_epoch(iso):
+    """Epoch seconds from a gold-api updatedAt string (or None)."""
+    try:
+        from datetime import datetime
+        return datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp()
+    except Exception:  # noqa: BLE001
+        return None
+
 try:
     from datetime import datetime
     from zoneinfo import ZoneInfo
@@ -432,13 +441,28 @@ def tick_spot(max_age=0.8):
 
     price, src = None, None
 
-    # 1. real-time websocket mid, pinned to spot XAU via the anchor offset
+    # 1. real-time websocket mid, pinned to spot XAU via the anchor offset.
+    #    The offset is measured TIMESTAMP-MATCHED: gold-api's (slow, ~30s)
+    #    quote is paired with the book mid at the quote's own as-of time,
+    #    so the anchor carries no staleness bias — the displayed price
+    #    follows the live book instead of trailing the slow spot feed.
     wm, _wt = wsfeed.mid(max_age=30)
     if wm:
-        if spot:
-            _anchor_mem.update(offset=spot["price"] - wm, t=now)
+        anchor_target = None
+        if spot and spot.get("updatedAt"):
+            ts = _feed_epoch(spot["updatedAt"])
+            if ts and now - ts <= 120:
+                m_then = wsfeed.mid_at(ts)
+                if m_then:
+                    anchor_target = spot["price"] - m_then
+        if anchor_target is None and spot:
+            anchor_target = spot["price"] - wm
+        if anchor_target is None and q and basis_ok:
+            anchor_target = (q - _basis_mem["value"]) - wm
+        if anchor_target is not None and abs(anchor_target) <= 8.0:
+            _anchor_mem.update(offset=anchor_target, t=now)
         off = _anchor_mem["offset"]
-        if abs(off) <= 6.0:
+        if abs(off) <= 8.0:
             price, src = round(wm + off, 2), "realtime feed"
     # 2. live futures quote minus basis
     if price is None and q and basis_ok:
@@ -475,6 +499,22 @@ def build_payload(tf, d):
         candles = raw
         source = d["source"]
     _basis_mem.update(t=time.time(), value=adjust, valid=bool(adjust))
+
+    # live-tick patch: the FORMING candle and the payload price follow the
+    # realtime feed (ws book + matched anchor), not the candle source's
+    # last close — so /api/data never lags /api/tick and the UI's periodic
+    # reload can't drag the displayed price backwards.
+    try:
+        _tp, _tsrc = tick_spot()
+        if _tp and candles:
+            _lc = candles[-1]
+            _lc["c"] = float(_tp)
+            if _tp > _lc["h"]:
+                _lc["h"] = float(_tp)
+            if _tp < _lc["l"]:
+                _lc["l"] = float(_tp)
+    except Exception:  # noqa: BLE001
+        pass
 
     ensure_model(tf, candles)
     model = models[tf]

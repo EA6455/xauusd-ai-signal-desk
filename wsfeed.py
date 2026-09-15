@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+from collections import deque
 
 try:
     import websocket  # websocket-client package
@@ -27,6 +28,7 @@ _event = threading.Condition()
 _bid = {"v": None, "t": 0.0}
 _ask = {"v": None, "t": 0.0}
 _last = {"v": None, "t": 0.0}
+_hist = deque(maxlen=2400)          # (epoch, mid) — ~1h of bbo updates
 _started = False
 
 
@@ -36,6 +38,19 @@ def mid(max_age=30.0):
         if _bid["v"] and _ask["v"] and time.time() - min(_bid["t"], _ask["t"]) < max_age:
             return (_bid["v"] + _ask["v"]) / 2.0, min(_bid["t"], _ask["t"])
     return None, None
+
+
+def mid_at(ts, tol=45.0):
+    """Mid price closest in time to epoch ts, or None if no sample nearby.
+    Used to pair a delayed spot quote with the book state at ITS OWN
+    timestamp, so the anchor offset carries no staleness bias."""
+    with _lock:
+        if not _hist:
+            return None
+        best = min(_hist, key=lambda x: abs(x[0] - ts))
+        if abs(best[0] - ts) <= tol:
+            return best[1]
+    return None
 
 
 def last_trade(max_age=300.0):
@@ -79,6 +94,7 @@ def _on_message(ws, message):
             with _lock:
                 _bid.update(v=float(d["bids"][0][0]), t=now)
                 _ask.update(v=float(d["asks"][0][0]), t=now)
+                _hist.append((now, (_bid["v"] + _ask["v"]) / 2.0))
             with _event:
                 _event.notify_all()          # wake every waiting client instantly
         elif ch == "trades" and j.get("data"):

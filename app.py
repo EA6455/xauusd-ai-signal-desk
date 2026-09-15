@@ -88,19 +88,24 @@ def _save_state():
         pass
 
 
+TG_CHATS = [c.strip() for c in TG_CHAT.split(",") if c.strip()]
+
+
 def _notify(text):
-    """Send a Telegram message if TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are set."""
-    if not (TG_TOKEN and TG_CHAT):
+    """Send a Telegram message to every configured chat (private and/or group).
+    TELEGRAM_CHAT_ID may be a comma-separated list of chat ids."""
+    if not (TG_TOKEN and TG_CHATS):
         return
-    try:
-        import urllib.request
-        req = urllib.request.Request(
-            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-            data=json.dumps({"chat_id": TG_CHAT, "text": text}).encode(),
-            headers={"Content-Type": "application/json"})
-        urllib.request.urlopen(req, timeout=10)
-    except Exception:  # noqa: BLE001
-        pass
+    import urllib.request
+    for chat in TG_CHATS:
+        try:
+            req = urllib.request.Request(
+                f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+                data=json.dumps({"chat_id": chat, "text": text}).encode(),
+                headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=10)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 # ------------------------------------------------------------------ models

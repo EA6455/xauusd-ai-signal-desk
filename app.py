@@ -564,12 +564,17 @@ def _tick_spot_raw(max_age=0.8):
             anchor_target = spot["price"] - wm
         if anchor_target is not None and abs(anchor_target) <= 8.0:
             if matched_ts is not None and matched_ts != _anchor_mem.get("last_ts"):
-                # fast warm-up after a start, then a slow steady EMA so the
-                # level rides out gold-api's transient lag during fast moves
+                # AUTO-SYNC TO THE REAL MARKET: each NEW spot print re-locks
+                # the level hard (a just-published quote IS the market at that
+                # instant); older re-samples only nudge it gently.
                 prev = _anchor_mem.get("ema")
                 warm = _anchor_mem.get("warm", 0)
-                alpha = 0.35 if warm < 8 else 0.10
-                ema = anchor_target if prev is None else prev + alpha * (anchor_target - prev)
+                quote_age = max(0.0, now - matched_ts)
+                if prev is None:
+                    ema = anchor_target
+                else:
+                    alpha = 0.35 if warm < 8 else (0.55 if quote_age <= 20 else 0.08)
+                    ema = prev + alpha * (anchor_target - prev)
                 _anchor_mem.update(ema=ema, warm=warm + 1, last_ts=matched_ts)
             elif matched_ts is None:
                 if _anchor_mem.get("ema") is None:
@@ -597,7 +602,14 @@ def _tick_spot_raw(max_age=0.8):
                 _ts = _feed_epoch(spot["updatedAt"])
                 if _ts:
                     ga_age = now - _ts
-            w_f = 0.60 if ga_age <= 25 else 0.72
+            # the fresher the spot print, the more it IS the market;
+            # as it ages the instant futures level carries the movement
+            if ga_age <= 20:
+                w_f = 0.40
+            elif ga_age <= 45:
+                w_f = 0.60
+            else:
+                w_f = 0.72
             _anchor_mem["offset"] = (1.0 - w_f) * ea + w_f * ef
         elif ea is not None:
             _anchor_mem["offset"] = ea

@@ -211,7 +211,7 @@
           <div class="src" id="srcBadge"></div>
           <div class="src" id="latBadge" title="Age of the last price update — how far behind the exchange your screen is"></div>
           <div class="src" id="syncBadge" style="cursor:pointer; color:var(--gold)"
-               title="Match all prices to YOUR broker: tap, type the price your broker shows, done">⚡ sync broker</div>
+               title="Auto-synced to the live market. Tap to optionally match your exact broker instead">⚡ auto · live market</div>
         </div>
         <div id="syncRow" style="display:none; align-items:center; gap:8px; margin-bottom:10px; flex-wrap:wrap">
           <span class="small muted">Price showing at <b>your broker</b> right now:</span>
@@ -1036,8 +1036,11 @@ const INITIAL = {{ payload|tojson }};
 
   // ---------- broker sync ----------
   function showSyncState(off){
-    $('syncBadge').textContent = off ? '⚡ synced ' + (off >= 0 ? '+' : '') + off.toFixed(2) : '⚡ sync broker';
+    $('syncBadge').textContent = off
+      ? '⚡ broker ' + (off >= 0 ? '+' : '') + off.toFixed(2)
+      : '⚡ auto · live market';
   }
+  showSyncState(parseFloat(localStorage.getItem('broker_offset')) || 0);
   $('syncBadge').addEventListener('click', () => {
     const row = $('syncRow');
     row.style.display = row.style.display === 'none' ? 'flex' : 'none';

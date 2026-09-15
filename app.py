@@ -567,7 +567,7 @@ def tick_spot(max_age=0.8):
                 # level rides out gold-api's transient lag during fast moves
                 prev = _anchor_mem.get("ema")
                 warm = _anchor_mem.get("warm", 0)
-                alpha = 0.35 if warm < 8 else 0.05
+                alpha = 0.35 if warm < 8 else 0.10
                 ema = anchor_target if prev is None else prev + alpha * (anchor_target - prev)
                 _anchor_mem.update(ema=ema, warm=warm + 1, last_ts=matched_ts)
             elif matched_ts is None:
@@ -581,7 +581,7 @@ def tick_spot(max_age=0.8):
             if abs(fs) <= 8.0 and now - _anchor_mem.get("last_f_ts", 0) >= 5:
                 prev = _anchor_mem.get("ema_f")
                 warm = _anchor_mem.get("warm_f", 0)
-                alpha = 0.35 if warm < 12 else 0.08
+                alpha = 0.35 if warm < 12 else 0.15
                 ema_f = fs if prev is None else prev + alpha * (fs - prev)
                 _anchor_mem.update(ema_f=ema_f, warm_f=warm + 1, last_f_ts=now)
         # ---- blend: level truth (A) + real-time tracking (B)
@@ -634,7 +634,7 @@ def build_payload(tf, d):
     # futures anchor sample isn't contaminated by any single spot quote
     prev_b = _basis_mem.get("ema")
     bw = _basis_mem.get("bwarm", 0)
-    b_ema = adjust if prev_b is None else prev_b + (0.2 if bw < 10 else 0.02) * (adjust - prev_b)
+    b_ema = adjust if prev_b is None else prev_b + (0.2 if bw < 10 else 0.05) * (adjust - prev_b)
     _basis_mem.update(t=time.time(), value=round(b_ema, 2), ema=b_ema,
                       valid=bool(adjust), bwarm=bw + 1)
 
@@ -839,12 +839,13 @@ def refresh(tf, force=False):
                     _save_state()
         finally:
             st.building = False
-    with st.lock:
-        with STATE_LOCK:
+    note = get_note()                      # outside the tf lock — it can
+    with st.lock:                           # take a moment when its 4-minute
+        with STATE_LOCK:                    # cache expires
             if st.payload is not None:
                 st.payload["alerts"] = STATE["alerts"][:30]
                 st.payload["priceAlerts"] = STATE["priceAlerts"]
-                st.payload["note"] = get_note()
+                st.payload["note"] = note
                 st.payload["tracker"] = dict(live=STATE.get("liveTrade"),
                                              history=STATE.get("tradeHistory", [])[:8])
         return st.payload

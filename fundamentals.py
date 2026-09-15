@@ -62,9 +62,9 @@ def _strip_tags(s):
 FAIL_BACKOFF = 600                 # retry a dead source at most every 10 min
 
 
-def calendar(max_age=3600):
+def calendar(max_age=6 * 3600):
     """This + next week's events as dicts (ts, title, country, impact,
-    forecast, previous). Cached one hour; failures back off 10 minutes."""
+    forecast, previous). Weekly data -> cached 6 hours; failures back off."""
     now = time.time()
     if now - _cal_mem["t"] < max_age and _cal_mem["events"]:
         return _cal_mem["events"]

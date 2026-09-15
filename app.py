@@ -223,7 +223,8 @@ def maybe_alert(tf, sig_type, price, score, conf, atr=None):
         STATE["alerts"].insert(0, a)
         del STATE["alerts"][100:]
         _save_state()
-    _notify(("🟢 " if sig_type == "BUY" else "🔴 ") + a["msg"])
+    # web-feed only — the phone is reserved for A+ entries, TP/SL results
+    # and user-armed price alerts (no chart-flip messages)
 
 
 SETUP_COOLDOWN_S = 2 * 3600         # min gap between ENTRY alerts
@@ -254,7 +255,19 @@ def maybe_setup_alert(ent):
         STATE["alerts"].insert(0, a)
         del STATE["alerts"][100:]
         _save_state()
-    _notify("🎯 " + a["msg"])
+    # phone message: the classic SNR signal card (ONE message per A+ zone)
+    side = ent.get("zoneSide") or ("demand" if ent["direction"] == "LONG" else "supply")
+    setup_lbl = "Support" if side == "demand" else "Resistance"
+    icon = "🟢" if ent["direction"] == "LONG" else "🔴"
+    _notify(
+        f"{icon} A+ {ent['direction']} SIGNAL\n\n"
+        f"📊 Timeframe: 15M\n"
+        f"💰 Symbol: XAUUSD\n"
+        f"📍 Setup: {setup_lbl}\n\n"
+        f"🎯 Entry: {ent['entry']:,.2f}\n"
+        f"🛑 SL: {ent['sl']:,.2f}\n"
+        f"🎯 TP: {ent['tp1']:,.2f}\n\n"
+        f"⭐ SNR Rating: {ent['grade']}")
 
 
 def _close_trade(tr, result, r, price):

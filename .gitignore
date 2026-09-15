@@ -8,3 +8,5 @@ ngrok_domain
 serveo_key*
 serveo.sh
 .env
+telegram_token
+telegram_chat

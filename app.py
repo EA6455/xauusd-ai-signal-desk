@@ -192,7 +192,14 @@ def maybe_alert(tf, sig_type, price, score, conf, atr=None):
         if prev == sig_type:
             return
         now = time.time()
-        if prev is not None and now - last_t < FLIP_REARM_MIN * 60:
+        if prev is None:
+            # first stance after a (re)start is just "where we are" — prime
+            # the state silently instead of messaging the phone
+            STATE["lastSig"][tf] = sig_type
+            STATE.setdefault("lastSigT", {})[tf] = now
+            _save_state()
+            return
+        if now - last_t < FLIP_REARM_MIN * 60:
             # too soon after the last alert from this timeframe: track the
             # stance silently so no stale alert fires later
             STATE["lastSig"][tf] = sig_type
@@ -219,15 +226,23 @@ def maybe_alert(tf, sig_type, price, score, conf, atr=None):
     _notify(("🟢 " if sig_type == "BUY" else "🔴 ") + a["msg"])
 
 
+SETUP_COOLDOWN_S = 2 * 3600         # min gap between ENTRY alerts
+
+
 def maybe_setup_alert(ent):
-    """Fire an alert only on FULL SNR confluence (8/8, A+) retests."""
+    """Fire an alert only on FULL SNR confluence (8/8, A+) retests — once per
+    ZONE (not per bar: a setup that stays live for hours must not re-alert
+    every 15 minutes) and at most once per SETUP_COOLDOWN_S."""
     if not ent or not ent.get("active") or ent.get("grade") != "A+":
         return
-    key = f"{ent['direction']}:{ent['barTime']}"
+    key = ent.get("zoneKey") or f"{ent['direction']}:{ent['barTime']}"
     with STATE_LOCK:
         if STATE.get("lastSetup") == key:
             return
+        if time.time() - STATE.get("lastSetupT", 0) < SETUP_COOLDOWN_S:
+            return
         STATE["lastSetup"] = key
+        STATE["lastSetupT"] = time.time()
         typ = "ENTRY_BUY" if ent["direction"] == "LONG" else "ENTRY_SELL"
         a = dict(id=_next_id(), time=int(time.time()), tf="15m", type=typ,
                  price=ent["entry"], score=round(ent["passed"] / 8.0, 2),
@@ -253,7 +268,7 @@ def ensure_trade(ent):
     """Open a tracked position when an A+ setup fires (one at a time)."""
     if not ent or not ent.get("active"):
         return
-    key = f"{ent['direction']}:{ent['barTime']}"
+    key = ent.get("zoneKey") or f"{ent['direction']}:{ent['barTime']}"
     with STATE_LOCK:
         lt = STATE.get("liveTrade")
         if lt and lt.get("status") not in ("closed", None):

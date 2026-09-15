@@ -414,7 +414,8 @@ def evaluate(candles15, candles_1h=None):
         rr1=TP1_R, rr2=TP2_R, atr=round(a, 2), barTime=pack["t"][i_now],
         checks=[dict(label=CHECKS[kk], ok=bool(ok[kk])) for kk in range(8)],
         trend1h={1: "HH·HL BULLISH", -1: "LH·LL BEARISH", 0: "RANGING"}[int(struct[i_last])],
-        zoneSide=z["side"])
+        zoneSide=z["side"],
+        zoneKey=f"{z['side']}:{pack['t'][z['anchor']]}")   # zone identity: one alert per ZONE
 
 
 # ------------------------------------------------------------------ backtest

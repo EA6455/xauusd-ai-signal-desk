@@ -65,7 +65,7 @@ def app_version():
 STATE_LOCK = threading.Lock()
 STATE = dict(alerts=[], priceAlerts=[], lastSig={}, lastPrice=None,
              liveTrade=None, tradeHistory=[], lastSigT={}, lastSetup=None,
-             lastSetupT=0.0, eventAlerted=[], newsSeen=None)
+             lastSetupT=0.0, eventAlerted=[], newsSeen=None, brokerOffset=0.0)
 try:
     with open(STATE_PATH) as f:
         _loaded = json.load(f)
@@ -507,8 +507,9 @@ except Exception:  # noqa: BLE001  — no tz data: assume open, ws feed still ru
         return True
 
 
-def tick_spot(max_age=0.8):
-    """Freshest spot XAU/USD for the live tick line.
+def _tick_spot_raw(max_age=0.8):
+    """Freshest spot XAU/USD for the live tick line (market level, no
+    per-broker adjustment).
 
     Priority:
       1. OKX websocket mid-price (tick-by-tick) + a spot anchor offset  ← realtime
@@ -623,6 +624,18 @@ def tick_spot(max_age=0.8):
     return price, src
 
 
+def tick_spot(max_age=0.8, broker=True):
+    """Live price as displayed. `broker=True` adds the user's broker-sync
+    offset so every shown number (ticks, alerts, tracker) matches THEIR
+    broker exactly; internal candle work uses broker=False."""
+    p, src = _tick_spot_raw(max_age)
+    if p is not None and broker:
+        bo = STATE.get("brokerOffset") or 0.0
+        if bo:
+            p = round(p + bo, 2)
+    return p, src
+
+
 def build_payload(tf, d):
     raw = d["candles"]
 
@@ -653,7 +666,7 @@ def build_payload(tf, d):
     # last close — so /api/data never lags /api/tick and the UI's periodic
     # reload can't drag the displayed price backwards.
     try:
-        _tp, _tsrc = tick_spot()
+        _tp, _tsrc = tick_spot(broker=False)
         if _tp and candles:
             _lc = candles[-1]
             _lc["c"] = float(_tp)
@@ -1190,6 +1203,39 @@ def api_wait():
             return jsonify(price=round(p, 2) if p else None, source=src,
                            t=int(now), version=app_version(), keepalive=True)
         wsfeed.wait_for_change(min(0.5, deadline - now))
+
+
+@app.route("/api/broker-sync", methods=["POST"])
+def api_broker_sync():
+    """Match the displayed prices to the user's broker: send the price you
+    see at your broker (or a raw offset) and every number on the desk shifts
+    to that feed. |offset| is capped at $25."""
+    j = request.get_json(force=True, silent=True) or {}
+    offset = None
+    try:
+        if j.get("offset") is not None:
+            offset = float(j["offset"])
+        elif j.get("price") is not None:
+            p, _s = _tick_spot_raw()
+            if p:
+                offset = float(j["price"]) - p
+    except (TypeError, ValueError):
+        offset = None
+    if offset is None or abs(offset) > 25:
+        return jsonify(error="send {price: what your broker shows} or {offset}"), 400
+    with STATE_LOCK:
+        STATE["brokerOffset"] = round(offset, 2)
+        _save_state()
+    p, _s = tick_spot()
+    return jsonify(offset=round(offset, 2), price=p)
+
+
+@app.route("/api/broker-sync", methods=["DELETE"])
+def api_broker_sync_clear():
+    with STATE_LOCK:
+        STATE["brokerOffset"] = 0.0
+        _save_state()
+    return jsonify(offset=0.0)
 
 
 @app.route("/api/health")

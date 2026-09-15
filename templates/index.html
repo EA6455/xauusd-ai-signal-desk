@@ -209,6 +209,16 @@
           <div class="big mono" id="price">—</div>
           <div class="chg mono" id="chg"></div>
           <div class="src" id="srcBadge"></div>
+          <div class="src" id="latBadge" title="Age of the last price update — how far behind the exchange your screen is"></div>
+          <div class="src" id="syncBadge" style="cursor:pointer; color:var(--gold)"
+               title="Match all prices to YOUR broker: tap, type the price your broker shows, done">⚡ sync broker</div>
+        </div>
+        <div id="syncRow" style="display:none; align-items:center; gap:8px; margin-bottom:10px; flex-wrap:wrap">
+          <span class="small muted">Price showing at <b>your broker</b> right now:</span>
+          <input id="syncInput" type="number" step="0.01" style="width:110px; background:var(--card2);
+            border:1px solid var(--border); color:var(--text); border-radius:8px; padding:7px 9px; font-size:13px; outline:none">
+          <button id="syncSet">Sync</button>
+          <button id="syncClear" title="Remove the offset">Reset</button>
         </div>
         <div class="chart-wrap">
           <canvas id="chart"></canvas>
@@ -326,7 +336,7 @@ const INITIAL = {{ payload|tojson }};
 
   const state = { tf: '60m', data: null, lastAlertId: 0, sound: false, ready: false,
                   hover: null, dispPrice: null, refPrice: null, lastTickT: 0,
-                  entry: null, entryStats: null };
+                  clockSkew: 0, entry: null, entryStats: null };
   let audioCtx = null, pollTimer = null, entryTimer = null;
   const TF_SEC = {'15m': 900, '60m': 3600, '1d': 86400};
 
@@ -418,6 +428,10 @@ const INITIAL = {{ payload|tojson }};
     const closed = src === 'market closed';
     $('mktBadge').className = 'livebadge' + (closed ? ' stale' : '');
     $('mktTxt').textContent = closed ? 'GOLD CLOSED' : 'GOLD OPEN';
+    // live delay proof: age of this tick = now - server timestamp (skew-corrected)
+    const age = Math.max(0, Date.now() / 1000 - state.clockSkew - (tsec || 0));
+    $('latBadge').textContent = (age < 90 && !closed)
+      ? '⏱ ' + (age < 10 ? age.toFixed(1) + 's' : Math.round(age) + 's') + ' behind' : '';
     renderTracker(); drawChart();
   }
 
@@ -685,6 +699,7 @@ const INITIAL = {{ payload|tojson }};
       } else {
         $('errBanner').style.display = 'none';
         state.version = j.version;
+        if(j.serverNow) state.clockSkew = Date.now() / 1000 - j.serverNow;
         state.data = j;
         if(j.entry){ state.entry = j.entry; state.entryStats = j.entryStats; }
         render(); handleAlerts();
@@ -1019,8 +1034,60 @@ const INITIAL = {{ payload|tojson }};
     if(!document.hidden){ load(false); loadEntry(); }
   });
 
+  // ---------- broker sync ----------
+  function showSyncState(off){
+    $('syncBadge').textContent = off ? '⚡ synced ' + (off >= 0 ? '+' : '') + off.toFixed(2) : '⚡ sync broker';
+  }
+  $('syncBadge').addEventListener('click', () => {
+    const row = $('syncRow');
+    row.style.display = row.style.display === 'none' ? 'flex' : 'none';
+    if(row.style.display === 'flex') $('syncInput').value = (state.dispPrice || '').toFixed ? state.dispPrice.toFixed(2) : '';
+  });
+  $('syncSet').addEventListener('click', async () => {
+    const v = parseFloat($('syncInput').value);
+    if(!(v > 0)){ toast('Enter the price your broker is showing'); return; }
+    try{
+      const r = await apiFetch('/api/broker-sync', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({price: v})
+      });
+      const j = await r.json();
+      if(j.error){ toast('⚠ ' + j.error); return; }
+      localStorage.setItem('broker_offset', j.offset);
+      showSyncState(j.offset);
+      $('syncRow').style.display = 'none';
+      toast('⚡ Synced — prices now match your broker (offset ' +
+            (j.offset >= 0 ? '+' : '') + j.offset.toFixed(2) + ')');
+      load(false);
+    }catch(e){ toast('⚠ Sync failed'); }
+  });
+  $('syncClear').addEventListener('click', async () => {
+    try{
+      await apiFetch('/api/broker-sync', {method: 'DELETE'});
+      localStorage.removeItem('broker_offset');
+      showSyncState(0);
+      $('syncRow').style.display = 'none';
+      toast('Broker offset removed — back to market spot');
+      load(false);
+    }catch(e){}
+  });
+  (async function restoreSync(){
+    // after a server restart the stored offset is re-applied automatically
+    const off = parseFloat(localStorage.getItem('broker_offset'));
+    if(!isNaN(off) && off !== 0){
+      try{
+        await apiFetch('/api/broker-sync', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({offset: off})
+        });
+        showSyncState(off);
+      }catch(e){}
+    }
+  })();
+
   // ---------- boot ----------
   if(typeof INITIAL !== 'undefined' && INITIAL && !INITIAL.error && INITIAL.candles){
+    if(INITIAL.serverNow) state.clockSkew = Date.now() / 1000 - INITIAL.serverNow;
     state.tf = INITIAL.tf;
     state.data = INITIAL;
     document.querySelectorAll('.tabs button').forEach(x =>

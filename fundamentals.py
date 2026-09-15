@@ -59,12 +59,17 @@ def _strip_tags(s):
 
 
 # ------------------------------------------------------------- calendar
+FAIL_BACKOFF = 600                 # retry a dead source at most every 10 min
+
+
 def calendar(max_age=3600):
     """This + next week's events as dicts (ts, title, country, impact,
-    forecast, previous). Cached one hour."""
+    forecast, previous). Cached one hour; failures back off 10 minutes."""
     now = time.time()
     if now - _cal_mem["t"] < max_age and _cal_mem["events"]:
         return _cal_mem["events"]
+    if now - _cal_mem.get("failT", 0) < FAIL_BACKOFF:
+        return _cal_mem["events"]          # source recently failed — back off
     events = []
     for url in (CAL_URL, CAL_NEXT_URL):
         try:
@@ -81,7 +86,10 @@ def calendar(max_age=3600):
         except Exception:  # noqa: BLE001
             continue
     events.sort(key=lambda e: e["ts"])
-    _cal_mem.update(t=now, events=events)
+    if events:
+        _cal_mem.update(t=now, events=events)
+    else:
+        _cal_mem["failT"] = now
     return events
 
 
@@ -134,6 +142,8 @@ def watcher_headlines(max_age=180, limit=25):
     now = time.time()
     if now - _watcher_mem["t"] < max_age and _watcher_mem["items"]:
         return _watcher_mem["items"]
+    if now - _watcher_mem.get("failT", 0) < FAIL_BACKOFF:
+        return _watcher_mem["items"]
     items = []
     try:
         page = _get(WATCHER_URL, timeout=12)
@@ -150,7 +160,10 @@ def watcher_headlines(max_age=180, limit=25):
                 items.append((int(ts), txt))
     except Exception:  # noqa: BLE001
         pass
-    _watcher_mem.update(t=now, items=items)
+    if items:
+        _watcher_mem.update(t=now, items=items)
+    else:
+        _watcher_mem["failT"] = now
     return items
 
 
@@ -158,6 +171,8 @@ def google_news(max_age=900, limit=12):
     """Gold-relevant headlines from Google News RSS as (ts, title, source)."""
     now = time.time()
     if now - _gnews_mem["t"] < max_age and _gnews_mem["items"]:
+        return _gnews_mem["items"]
+    if now - _gnews_mem.get("failT", 0) < FAIL_BACKOFF:
         return _gnews_mem["items"]
     items = []
     try:
@@ -181,7 +196,10 @@ def google_news(max_age=900, limit=12):
         items.sort(key=lambda x: -x[0])
     except Exception:  # noqa: BLE001
         pass
-    _gnews_mem.update(t=now, items=items)
+    if items:
+        _gnews_mem.update(t=now, items=items)
+    else:
+        _gnews_mem["failT"] = now
     return items
 
 

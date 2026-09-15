@@ -189,7 +189,7 @@ def maybe_alert(tf, sig_type, price, score, conf):
 
 
 def maybe_setup_alert(ent):
-    """Fire an alert only on FULL-confluence (8/8, A+) setups."""
+    """Fire an alert only on FULL SNR confluence (8/8, A+) retests."""
     if not ent or not ent.get("active") or ent.get("grade") != "A+":
         return
     key = f"{ent['direction']}:{ent['barTime']}"
@@ -201,9 +201,10 @@ def maybe_setup_alert(ent):
         a = dict(id=_next_id(), time=int(time.time()), tf="15m", type=typ,
                  price=ent["entry"], score=round(ent["passed"] / 8.0, 2),
                  confidence=round(ent["passed"] / 8.0, 2),
-                 msg=(f"Tactical {ent['grade']} {ent['direction']} setup @ {ent['entry']:,.2f} · "
+                 msg=(f"SNR {ent['grade']} {ent['direction']} retest @ {ent['entry']:,.2f} · "
+                      f"zone {ent['entryZone'][0]:,.1f}–{ent['entryZone'][1]:,.1f} · "
                       f"SL {ent['sl']:,.2f} · TP1 {ent['tp1']:,.2f} · "
-                      f"{ent['passed']}/8 confluences"))
+                      f"{ent['passed']}/8 SNR checks"))
         STATE["alerts"].insert(0, a)
         del STATE["alerts"][100:]
         _save_state()

@@ -244,7 +244,7 @@
       </div>
 
       <div class="card" id="entryCard">
-        <div class="card-head"><h2>Tactical Entry · 15m</h2><span class="grade wait" id="entryStatus">…</span></div>
+        <div class="card-head"><h2>SNR Entry · 15m</h2><span class="grade wait" id="entryStatus">…</span></div>
         <div id="entryBody"><div class="muted small">loading tactical engine…</div></div>
       </div>
 
@@ -277,8 +277,10 @@
     logistic-regression model (45%) with a classic rule ensemble (55%):
     EMA 9/21 trend, SMA-20, MACD, RSI and Bollinger bands.</p>
     <ul style="margin-top:6px">
-      <li><b>Tactical Entry (15m)</b> — fires only on full 8/8 confluence (~1/day), 1:2 RR
-      (TP 3×ATR / SL 1.5×ATR), and only in live trading sessions (no signals in dead hours).</li>
+      <li><b>SNR Entry (15m)</b> — Malaysian-style Supply &amp; Demand: market structure
+      (HH·HL / LH·LL), break of structure, the origin zone that caused it, first retest with
+      engulfing/pin confirmation, 1H trend agreement, SL beyond the zone, TP at 1:2 RR —
+      and never during dead hours.</li>
       <li><b>Signal Tracker</b> — every A+ signal is managed live: half banked at TP1 (+1.0R),
       stop to breakeven, runner to TP2 (+2.5R). You get alerts at every step, and the
       outcome history builds up on the card.</li>
@@ -445,21 +447,32 @@ const INITIAL = {{ payload|tojson }};
     const long = e.direction === 'LONG';
     $('entryCard').className = 'card' + (e.active ? (long ? ' glow-long' : ' glow-short') : '');
     if(e.active){
-      st.textContent = e.grade + ' ' + e.direction + ' SETUP';
+      st.textContent = e.grade + ' ' + e.direction + ' RETEST';
       st.className = 'grade ' + (long ? 'long' : 'short');
     } else {
-      st.textContent = (e.passed === 7 ? '1 CHECK AWAY · 7/8' : 'WAITING · ' + e.passed + '/8');
+      st.textContent = (e.zoneSide ? 'ARMING · ' + e.passed + '/8' : 'WAITING · ' + e.passed + '/8');
       st.className = 'grade wait';
     }
     let h = '';
     if(e.active){
       h += '<div class="lvls">'
-        + lvl('Entry zone', e.entryZone[0].toFixed(1) + ' – ' + e.entryZone[1].toFixed(1))
+        + lvl((e.zoneSide === 'supply' ? 'Supply zone' : 'Demand zone'),
+              e.entryZone[0].toFixed(1) + ' – ' + e.entryZone[1].toFixed(1), 'var(--gold)')
         + lvl('Stop loss', e.sl.toFixed(1), 'var(--red)')
         + lvl('TP1 · 1:' + e.rr1.toFixed(1) + ' RR', e.tp1.toFixed(1), 'var(--green)')
         + lvl('TP2 · 1:' + e.rr2.toFixed(1) + ' RR', e.tp2.toFixed(1), 'var(--green)')
         + lvl('Risk (ATR)', e.atr.toFixed(2))
-        + lvl('1H trend', e.trend1h)
+        + lvl('Structure', e.trend1h)
+        + '</div>';
+    } else if(e.zoneSide){
+      h += '<div class="lvls">'
+        + lvl((e.zoneSide === 'supply' ? 'Supply zone' : 'Demand zone'),
+              e.entryZone[0].toFixed(1) + ' – ' + e.entryZone[1].toFixed(1), 'var(--gold)')
+        + lvl('Retest entry', e.entry.toFixed(1))
+        + lvl('Structure', e.trend1h)
+        + '</div>'
+        + '<div class="small muted" style="margin:2px 0 10px">fresh zone — waiting for the first retest'
+        + (e.session === 'dead' ? ' · <b style="color:var(--amber)">dead hours: no new signals</b>' : '')
         + '</div>';
     }
     h += e.checks.map(c => '<div class="chk"><span class="ic ' + (c.ok ? 'ok' : 'no') +
@@ -468,10 +481,10 @@ const INITIAL = {{ payload|tojson }};
     const s = state.entryStats;
     if(s && s.setups){
       h += '<div class="small muted" style="margin-top:10px; line-height:1.65">Backtest (last 60d): '
-        + '<b style="color:var(--text)">' + (s.winRate * 100).toFixed(0) + '%</b> hit TP1 (1:'
-        + (s.tpAtr / s.slAtr).toFixed(1) + ' RR) over ' + s.setups + ' full-confluence setups'
+        + '<b style="color:var(--text)">' + (s.winRate * 100).toFixed(0) + '%</b> hit TP1 (1:2 RR) over '
+        + s.setups + ' SNR retest setups'
         + ' · avg ' + (s.avgR >= 0 ? '+' : '') + s.avgR.toFixed(2) + 'R realized'
-        + '<br>TP ' + s.tpAtr + '×ATR / SL ' + s.slAtr + '×ATR · ~1 setup/day · resolves ≤ 5h · past ≠ future</div>';
+        + '<br>SL beyond zone · TP 1:2 RR · ~1 setup / 2–3 days · resolves ≤ 5h · past ≠ future</div>';
     }
     // session quality + risk calculator
     const ss = state.data && state.data.sessionStats;

@@ -243,7 +243,7 @@ def build_note(c15, c60, c1d, entry, signal, price):
                      f"checklist fills, the desk note will flag it. No checklist, no trade.")
     else:
         n = entry.get("passed", "?") if entry else "?"
-        paras.append(f"Plan: no clean setup on the tape right now ({n}/8 confluences). "
+        paras.append(f"Plan: no clean SNR retest on the tape right now ({n}/8 checks). "
                      f"That's fine — { _pick(bucket, ['patience is the position', 'flat is a position', 'the best trades are the ones you wait for'])}. "
                      f"When structure, momentum and location line up 8/8, the alert fires.")
 

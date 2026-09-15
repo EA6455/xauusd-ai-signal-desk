@@ -107,6 +107,33 @@
   .grade.wait{background:#1a2130; color:#94a3b8}
   .grade.bplus{background:#2a230f; color:var(--amber)}
   .grade.cplus{background:#1a2130; color:#7c8aa0}
+
+  /* AI analyst desk */
+  .cons-wrap{margin:6px 0 12px}
+  .cons-label{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:6px}
+  .cons-label b{font-size:15px; letter-spacing:.5px}
+  .cons-label span{font-size:12px; color:var(--muted)}
+  .cons-bar{position:relative; height:10px; border-radius:999px;
+    background:linear-gradient(90deg, var(--red) 0%, #4b5563 50%, var(--green) 100%)}
+  .cons-needle{position:absolute; top:-4px; width:4px; height:18px; border-radius:2px;
+    background:var(--text); box-shadow:0 0 0 2px rgba(10,14,22,.9);
+    left:50%; transition:left .8s cubic-bezier(.22,1,.36,1)}
+  .ai-row{display:flex; align-items:center; gap:10px; padding:7px 0;
+    border-top:1px solid var(--border)}
+  .ai-row:first-of-type{border-top:none}
+  .ai-ico{width:30px; height:30px; border-radius:8px; background:var(--bg2, #161c29);
+    display:flex; align-items:center; justify-content:center; font-size:15px; flex:none}
+  .ai-main{flex:1; min-width:0}
+  .ai-name{font-size:12.5px; font-weight:700; color:var(--text)}
+  .ai-note{font-size:11.5px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .ai-right{flex:none; width:86px; text-align:right}
+  .ai-badge{display:inline-block; font-size:10.5px; font-weight:800; letter-spacing:.8px;
+    padding:2px 8px; border-radius:999px; text-transform:uppercase}
+  .ai-badge.bull{background:rgba(38,211,111,.14); color:var(--green)}
+  .ai-badge.bear{background:rgba(245,73,61,.14); color:var(--red)}
+  .ai-badge.neut{background:#1a2130; color:#94a3b8}
+  .ai-conf{height:3px; border-radius:2px; background:#1a2130; margin-top:5px}
+  .ai-conf i{display:block; height:3px; border-radius:2px; background:var(--blue)}
   .rc{display:flex; gap:8px; margin-top:10px; align-items:center}
   .rc input{width:100%; background:var(--card2); border:1px solid var(--border); color:var(--text); border-radius:8px; padding:7px 9px; font-size:13px; outline:none}
   .rc input:focus{border-color:var(--gold)}
@@ -270,6 +297,15 @@
         <div id="noteBody" class="note"><div class="muted small">compiling desk note…</div></div>
       </div>
 
+      <div class="card" id="aiDeskCard">
+        <div class="card-head"><h2>AI Analyst Desk</h2><span class="muted small" id="deskTime">8 models voting</span></div>
+        <div class="cons-wrap">
+          <div class="cons-label"><b id="consLabel">—</b><span id="consCounts"></span></div>
+          <div class="cons-bar"><div class="cons-needle" id="consNeedle"></div></div>
+        </div>
+        <div id="deskBody"><div class="muted small">convening the analyst desk…</div></div>
+      </div>
+
       <div class="card" id="entryCard">
         <div class="card-head"><h2>SNR Entry · 15m</h2><span class="grade wait" id="entryStatus">…</span></div>
         <div id="entryBody"><div class="muted small">loading tactical engine…</div></div>
@@ -304,6 +340,9 @@
     logistic-regression model (45%) with a classic rule ensemble (55%):
     EMA 9/21 trend, SMA-20, MACD, RSI and Bollinger bands.</p>
     <ul style="margin-top:6px">
+      <li><b>AI Analyst Desk</b> — eight independent models read the same chart (neural ML,
+      momentum, market structure, SNR zones, mean reversion, volatility &amp; range, live
+      order flow, macro) and vote; the consensus meter aggregates them, confidence-weighted.</li>
       <li><b>SNR Entry (15m)</b> — graded setups: <b style="color:var(--green)">A+</b> (8/8,
       tracked + phone), <b style="color:var(--amber)">B+</b> (7/8, phone with warning),
       <b style="color:#7c8aa0">C+</b> (6/8, web only). Malaysian-style Supply &amp; Demand: market structure
@@ -491,6 +530,33 @@ const INITIAL = {{ payload|tojson }};
     body.innerHTML = h;
     $('noteTime').textContent = 'updated ' + new Date(n.updatedAt * 1000)
       .toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit'}) + ' · ' + n.session;
+  }
+
+  // ---------- AI analyst desk ----------
+  function renderDesk(){
+    const d = state.data && state.data.aiDesk;
+    const body = $('deskBody');
+    if(!d || !d.analysts){ body.innerHTML = '<div class="muted small">Analyst desk unavailable.</div>'; return; }
+    const c = d.consensus || {};
+    const lbl = $('consLabel');
+    lbl.textContent = c.label || '—';
+    lbl.style.color = (c.score > .15) ? 'var(--green)' : (c.score < -.15) ? 'var(--red)' : 'var(--muted)';
+    $('consCounts').textContent = (c.bull||0) + ' bullish · ' + (c.bear||0) + ' bearish · ' + (c.neutral||0) + ' neutral';
+    const sc = Math.max(-1, Math.min(1, c.score || 0));
+    $('consNeedle').style.left = ((sc + 1) / 2 * 100) + '%';
+    body.innerHTML = d.analysts.map(a => {
+      const v = a.verdict === 'bullish' ? 'bull' : a.verdict === 'bearish' ? 'bear' : 'neut';
+      const t = (a.note || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+      return '<div class="ai-row" title="' + t + '">'
+        + '<div class="ai-ico">' + a.icon + '</div>'
+        + '<div class="ai-main"><div class="ai-name">' + a.name + '</div>'
+        + '<div class="ai-note">' + t + '</div></div>'
+        + '<div class="ai-right"><span class="ai-badge ' + v + '">' + a.verdict + '</span>'
+        + '<div class="ai-conf"><i style="width:' + Math.round((a.conf || 0) * 100) + '%"></i></div>'
+        + '</div></div>';
+    }).join('');
+    if(c.asOf) $('deskTime').textContent = '8 models · updated ' + new Date(c.asOf * 1000)
+      .toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit'});
   }
 
   // ---------- tactical entry ----------
@@ -812,7 +878,7 @@ const INITIAL = {{ payload|tojson }};
         '-bar hit rate: ' + (hr.wins / hr.total * 100).toFixed(0) + '% (' + hr.wins + '/' + hr.total + ')'
       : 'No historical signal flips in the loaded window.';
 
-    renderNote(); renderTracker(); renderAlerts(); renderPa(); renderFundamentals();
+    renderNote(); renderDesk(); renderTracker(); renderAlerts(); renderPa(); renderFundamentals();
     if(d.entry){ renderEntry(); }
     drawChart();
   }

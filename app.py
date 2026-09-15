@@ -17,6 +17,7 @@ import time
 import numpy as np
 from flask import Flask, Response, jsonify, render_template, request
 
+import ai_desk
 import data
 import entries
 import fundamentals
@@ -884,13 +885,15 @@ def refresh(tf, force=False, allow_build=True):
                     _save_state()
         finally:
             st.building = False
-    note = get_note()                      # outside the tf lock — it can
+    note = get_note()
+    desk = get_ai_desk()                      # outside the tf lock — it can
     with st.lock:                           # take a moment when its 4-minute
         with STATE_LOCK:                    # cache expires
             if st.payload is not None:
                 st.payload["alerts"] = STATE["alerts"][:30]
                 st.payload["priceAlerts"] = STATE["priceAlerts"]
                 st.payload["note"] = note
+                st.payload["aiDesk"] = desk
                 st.payload["tracker"] = dict(live=STATE.get("liveTrade"),
                                              history=STATE.get("tradeHistory", [])[:8])
         return st.payload
@@ -1040,6 +1043,57 @@ def start_background():
 _note_cache = {"t": 0.0, "note": None}
 
 
+_desk_cache = {"t": 0.0, "desk": None}
+
+
+def get_ai_desk(force=False):
+    """AI Analyst Desk — 8 independent models voting on the same chart.
+    Rebuilt every 4 minutes (or on demand)."""
+    now = time.time()
+    if not force and _desk_cache["desk"] and now - _desk_cache["t"] < 240:
+        return _desk_cache["desk"]
+    try:
+        c15 = data.get_candles("15m").get("candles")
+        c60 = data.get_candles("60m").get("candles")
+        c1d = data.get_candles("1d").get("candles")
+        if not (c15 and c60 and c1d):
+            return _desk_cache["desk"]
+        spot_price, _ = spot_reference()
+        if spot_price:
+            adj = c15[-1]["c"] - spot_price
+            if 0 < adj < 150:
+                c15 = [dict(t=k["t"], o=k["o"] - adj, h=k["h"] - adj,
+                            l=k["l"] - adj, c=k["c"] - adj) for k in c15]
+                c60 = [dict(t=k["t"], o=k["o"] - adj, h=k["h"] - adj,
+                            l=k["l"] - adj, c=k["c"] - adj) for k in c60]
+                c1d = [dict(t=k["t"], o=k["o"] - adj, h=k["h"] - adj,
+                            l=k["l"] - adj, c=k["c"] - adj) for k in c1d]
+        ent = None
+        try:
+            ent = entries.evaluate(c15, c60)
+        except Exception:  # noqa: BLE001
+            pass
+        sig = {}
+        try:
+            p15 = tf_states["15m"].payload
+            if p15:
+                sig = p15.get("signal", {})
+        except Exception:  # noqa: BLE001
+            pass
+        fund = None
+        try:
+            fund = (fundamentals.snapshot() or {}).get("macro")
+        except Exception:  # noqa: BLE001
+            pass
+        desk = ai_desk.build(c15, c60, c1d, ent, sig, fund)
+        _desk_cache.update(t=now, desk=desk)
+        return desk
+    except Exception:  # noqa: BLE001
+        import traceback
+        traceback.print_exc()
+        return _desk_cache["desk"]
+
+
 def get_note(force=False):
     """Human-style desk commentary, rebuilt every 4 minutes (or on demand)."""
     now = time.time()
@@ -1112,6 +1166,7 @@ def index():
         payload = refresh("60m")
         if payload is not None:
             payload["note"] = get_note()
+            payload["aiDesk"] = get_ai_desk()
     except Exception:  # noqa: BLE001
         pass
     return render_template("index.html", payload=payload)

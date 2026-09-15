@@ -105,6 +105,8 @@
   .grade{font-size:11.5px; font-weight:900; padding:4px 10px; border-radius:99px; letter-spacing:.6px}
   .grade.long{background:#0c2a18; color:var(--green)} .grade.short{background:#2a1214; color:var(--red)}
   .grade.wait{background:#1a2130; color:#94a3b8}
+  .grade.bplus{background:#2a230f; color:var(--amber)}
+  .grade.cplus{background:#1a2130; color:#7c8aa0}
   .rc{display:flex; gap:8px; margin-top:10px; align-items:center}
   .rc input{width:100%; background:var(--card2); border:1px solid var(--border); color:var(--text); border-radius:8px; padding:7px 9px; font-size:13px; outline:none}
   .rc input:focus{border-color:var(--gold)}
@@ -302,7 +304,9 @@
     logistic-regression model (45%) with a classic rule ensemble (55%):
     EMA 9/21 trend, SMA-20, MACD, RSI and Bollinger bands.</p>
     <ul style="margin-top:6px">
-      <li><b>SNR Entry (15m)</b> — Malaysian-style Supply &amp; Demand: market structure
+      <li><b>SNR Entry (15m)</b> — graded setups: <b style="color:var(--green)">A+</b> (8/8,
+      tracked + phone), <b style="color:var(--amber)">B+</b> (7/8, phone with warning),
+      <b style="color:#7c8aa0">C+</b> (6/8, web only). Malaysian-style Supply &amp; Demand: market structure
       (HH·HL / LH·LL), break of structure, the origin zone that caused it, first retest with
       engulfing/pin confirmation, 1H trend agreement, SL beyond the zone, TP at 1:2 RR —
       and never during dead hours.</li>
@@ -507,21 +511,32 @@ const INITIAL = {{ payload|tojson }};
     if(e.active){
       st.textContent = e.grade + ' ' + e.direction + ' RETEST';
       st.className = 'grade ' + (long ? 'long' : 'short');
+    } else if(e.grade === 'B+' || e.grade === 'C+'){
+      st.textContent = e.grade + ' ' + e.direction + ' SETUP';
+      st.className = 'grade ' + (e.grade === 'B+' ? 'bplus' : 'cplus');
     } else {
       st.textContent = (e.zoneSide ? 'ARMING · ' + e.passed + '/8' : 'WAITING · ' + e.passed + '/8');
       st.className = 'grade wait';
     }
     let h = '';
-    if(e.active){
+    const live = e.active || e.grade === 'B+' || e.grade === 'C+';
+    if(live){
+      const zc = e.active ? 'var(--gold)' : (e.grade === 'B+' ? 'var(--amber)' : '#7c8aa0');
       h += '<div class="lvls">'
         + lvl((e.zoneSide === 'supply' ? 'Supply zone' : 'Demand zone'),
-              e.entryZone[0].toFixed(1) + ' – ' + e.entryZone[1].toFixed(1), 'var(--gold)')
+              e.entryZone[0].toFixed(1) + ' – ' + e.entryZone[1].toFixed(1), zc)
         + lvl('Stop loss', e.sl.toFixed(1), 'var(--red)')
         + lvl('TP1 · 1:' + e.rr1.toFixed(1) + ' RR', e.tp1.toFixed(1), 'var(--green)')
         + lvl('TP2 · 1:' + e.rr2.toFixed(1) + ' RR', e.tp2.toFixed(1), 'var(--green)')
         + lvl('Risk (ATR)', e.atr.toFixed(2))
         + lvl('Structure', e.trend1h)
         + '</div>';
+      if(e.grade === 'B+')
+        h += '<div class="small" style="margin:2px 0 10px; color:var(--amber)">⚠ B+ · '
+          + e.passed + '/8 confluence — reduced quality: smaller size or skip</div>';
+      if(e.grade === 'C+')
+        h += '<div class="small" style="margin:2px 0 10px; color:#7c8aa0">C+ · '
+          + e.passed + '/8 confluence — watchlist quality, web only</div>';
     } else if(e.zoneSide){
       h += '<div class="lvls">'
         + lvl((e.zoneSide === 'supply' ? 'Supply zone' : 'Demand zone'),
@@ -540,9 +555,19 @@ const INITIAL = {{ payload|tojson }};
     if(s && s.setups){
       h += '<div class="small muted" style="margin-top:10px; line-height:1.65">Backtest (last 60d): '
         + '<b style="color:var(--text)">' + (s.winRate * 100).toFixed(0) + '%</b> hit TP1 (1:2 RR) over '
-        + s.setups + ' SNR retest setups'
-        + ' · avg ' + (s.avgR >= 0 ? '+' : '') + s.avgR.toFixed(2) + 'R realized'
-        + '<br>SL beyond zone · TP 1:2 RR · ~1 setup / 2–3 days · resolves ≤ 5h · past ≠ future</div>';
+        + s.setups + ' A+ setups'
+        + ' · avg ' + (s.avgR >= 0 ? '+' : '') + s.avgR.toFixed(2) + 'R realized';
+      if(s.byGrade){
+        h += '<br>' + ['A+','B+','C+'].map(function(g){
+          var v = s.byGrade[g] || {};
+          if(!v.setups) return null;
+          var col = g === 'A+' ? 'var(--green)' : g === 'B+' ? 'var(--amber)' : '#7c8aa0';
+          return '<b style="color:' + col + '">' + g + '</b> ' + v.setups + ' · '
+            + Math.round((v.winRate || 0) * 100) + '% · '
+            + (v.avgR >= 0 ? '+' : '') + (v.avgR || 0).toFixed(2) + 'R';
+        }).filter(Boolean).join(' &nbsp;·&nbsp; ');
+      }
+      h += '<br>SL beyond zone · TP 1:2 RR · A+ ~1 per 2–3 days · resolves ≤ 5h · past ≠ future</div>';
     }
     // session quality + risk calculator
     const ss = state.data && state.data.sessionStats;
@@ -923,9 +948,12 @@ const INITIAL = {{ payload|tojson }};
       g.closePath(); g.fill();
     }
 
-    // live tactical levels (entry zone / SL / TPs)
+    // live tactical levels (entry zone / SL / TPs) — A+ gold, B+ amber, C+ gray
     const e15 = state.entry;
-    if(e15 && e15.active){
+    const e15live = e15 && (e15.active || e15.grade === 'B+' || e15.grade === 'C+');
+    if(e15live){
+      const gcol = e15.active ? 'rgba(234,181,79,0.9)'
+        : (e15.grade === 'B+' ? 'rgba(245,158,11,0.85)' : 'rgba(124,138,160,0.7)');
       const drawLvl = (p, col, label) => {
         if(p < lo || p > hi) return;
         const y = Y(p);
@@ -938,9 +966,10 @@ const INITIAL = {{ payload|tojson }};
       };
       const zy1 = Y(Math.max(e15.entryZone[0], lo));
       const zy2 = Y(Math.min(e15.entryZone[1], hi));
-      g.fillStyle = 'rgba(234,181,79,0.10)';
+      g.fillStyle = e15.active ? 'rgba(234,181,79,0.10)'
+        : (e15.grade === 'B+' ? 'rgba(245,158,11,0.08)' : 'rgba(124,138,160,0.06)');
       g.fillRect(padL, zy1, iw, Math.max(2, zy2 - zy1));
-      drawLvl(e15.entry, 'rgba(234,181,79,0.9)', 'ENTRY ' + e15.entry.toFixed(1));
+      drawLvl(e15.entry, gcol, (e15.active ? 'ENTRY ' : e15.grade + ' ENTRY ') + e15.entry.toFixed(1));
       drawLvl(e15.sl, '#f5493d', 'SL ' + e15.sl.toFixed(1));
       drawLvl(e15.tp1, '#26d36f', 'TP1 ' + e15.tp1.toFixed(1));
       drawLvl(e15.tp2, '#1aa85a', 'TP2 ' + e15.tp2.toFixed(1));

@@ -238,43 +238,53 @@ SETUP_COOLDOWN_S = 2 * 3600         # min gap between ENTRY alerts
 
 
 def maybe_setup_alert(ent):
-    """Fire an alert only on FULL SNR confluence (8/8, A+) retests — once per
-    ZONE (not per bar: a setup that stays live for hours must not re-alert
-    every 15 minutes) and at most once per SETUP_COOLDOWN_S."""
-    if not ent or not ent.get("active") or ent.get("grade") != "A+":
+    """Fire an alert on SNR retests, once per ZONE+GRADE (a setup that stays
+    live for hours must not re-alert every 15 minutes). A+ and B+ also go to
+    the phone (B+ carries a quality warning); C+ is web-only. Phone-worthy
+    grades share the SETUP_COOLDOWN_S anti-spam gap."""
+    if not ent or not ent.get("touching"):
         return
-    key = ent.get("zoneKey") or f"{ent['direction']}:{ent['barTime']}"
+    grade = ent.get("grade")
+    if grade not in ("A+", "B+", "C+"):
+        return
+    key = (ent.get("zoneKey") or f"{ent['direction']}:{ent['barTime']}") + ":" + grade
+    phone = grade in ("A+", "B+")
     with STATE_LOCK:
         if STATE.get("lastSetup") == key:
             return
-        if time.time() - STATE.get("lastSetupT", 0) < SETUP_COOLDOWN_S:
+        if phone and time.time() - STATE.get("lastSetupT", 0) < SETUP_COOLDOWN_S:
             return
         STATE["lastSetup"] = key
-        STATE["lastSetupT"] = time.time()
+        if phone:
+            STATE["lastSetupT"] = time.time()
         typ = "ENTRY_BUY" if ent["direction"] == "LONG" else "ENTRY_SELL"
         a = dict(id=_next_id(), time=int(time.time()), tf="15m", type=typ,
                  price=ent["entry"], score=round(ent["passed"] / 8.0, 2),
                  confidence=round(ent["passed"] / 8.0, 2),
-                 msg=(f"SNR {ent['grade']} {ent['direction']} retest @ {ent['entry']:,.2f} · "
+                 msg=(f"SNR {grade} {ent['direction']} retest @ {ent['entry']:,.2f} · "
                       f"zone {ent['entryZone'][0]:,.1f}–{ent['entryZone'][1]:,.1f} · "
                       f"SL {ent['sl']:,.2f} · TP1 {ent['tp1']:,.2f} · "
                       f"{ent['passed']}/8 SNR checks"))
         STATE["alerts"].insert(0, a)
         del STATE["alerts"][100:]
         _save_state()
-    # phone message: the classic SNR signal card (ONE message per A+ zone)
+    if not phone:
+        return
+    # phone message: the classic SNR signal card (ONE message per zone+grade)
     side = ent.get("zoneSide") or ("demand" if ent["direction"] == "LONG" else "supply")
     setup_lbl = "Support" if side == "demand" else "Resistance"
     icon = "🟢" if ent["direction"] == "LONG" else "🔴"
+    warn = "" if grade == "A+" else \
+        f"\n⚠ {ent['passed']}/8 confluence — reduced quality: smaller size or skip"
     _notify(
-        f"{icon} A+ {ent['direction']} SIGNAL\n\n"
+        f"{icon} {grade} {ent['direction']} SIGNAL\n\n"
         f"📊 Timeframe: 15M\n"
         f"💰 Symbol: XAUUSD\n"
         f"📍 Setup: {setup_lbl}\n\n"
         f"🎯 Entry: {ent['entry']:,.2f}\n"
         f"🛑 SL: {ent['sl']:,.2f}\n"
         f"🎯 TP: {ent['tp1']:,.2f}\n\n"
-        f"⭐ SNR Rating: {ent['grade']}")
+        f"⭐ SNR Rating: {grade}{warn}")
 
 
 def _close_trade(tr, result, r, price):

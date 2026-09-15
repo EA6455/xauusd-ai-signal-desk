@@ -79,10 +79,13 @@ def session_of(ts):
 
 
 def _grade(n):
+    """Setup quality ladder: A+ (8/8) > B+ (7/8) > C+ (6/8)."""
     if n >= 8:
         return "A+"
     if n == 7:
-        return "A"          # arming — shown, but no alert / no trigger
+        return "B+"
+    if n == 6:
+        return "C+"
     return None
 
 
@@ -281,9 +284,14 @@ def _resolve_snr(entry, sl, tp, pack, i, d):
     return None, None                       # ran out of data
 
 
-def _scan_setups(candles, need_confirmation=True):
-    """All historical SNR setups (event-driven: one evaluation per zone at its
-    first-touch bar). need_confirmation=False = grade A scan (7/8)."""
+GRADE_ORDER = {"A+": 3, "B+": 2, "C+": 1}
+
+
+def _scan_setups(candles):
+    """All historical SNR setups, graded (event-driven: one evaluation per
+    zone at its first-touch bar). Grading mirrors the live engine's 8 checks:
+    structure, BOS, origin zone, fresh, retest-in-zone, confirmation candle,
+    1H trend, session. A+ = 8/8, B+ = 7/8, C+ = 6/8 (below that: skipped)."""
     pack = _snr_pack(candles)
     struct, bos, htf, o, c = pack["struct"], pack["bos"], pack["htf"], pack["o"], pack["c"]
     hh, ll, atr, n = pack["h"], pack["l"], pack["atr"], pack["n"]
@@ -294,13 +302,11 @@ def _scan_setups(candles, need_confirmation=True):
         if i is None or i <= last_bar + COOLDOWN or i < 60 or i >= n - 1:
             continue
         d = 1 if z["side"] == "demand" else -1
-        if struct[i] != d or not bos[i] or not z["caused_bos"] or htf[i] != d:
-            continue
         sl = (z["bottom"] - SL_BUF_ATR * atr[i]) if d == 1 else \
              (z["top"] + SL_BUF_ATR * atr[i])
-        # entry: confirmation close within CONFIRM_WINDOW of the first touch
-        # (abort the zone if the stop is violated before confirmation)
-        entry = None
+        # walk the confirm window: first bar back inside the zone, and the
+        # first confirmation candle (abort if the stop is violated first)
+        k_ins = k_conf = None
         k = i
         end_k = min(n - 1, i + CONFIRM_WINDOW)
         while k <= end_k:
@@ -309,28 +315,39 @@ def _scan_setups(candles, need_confirmation=True):
             if d == -1 and hh[k] >= sl:
                 break
             inside = (c[k] >= z["bottom"]) if d == 1 else (c[k] <= z["top"])
-            if inside and (not need_confirmation
-                           or _confirm(o, c, hh, ll, k, d)):
-                entry = float(c[k])
-                break
+            if inside:
+                if k_ins is None:
+                    k_ins = k
+                if k_conf is None and _confirm(o, c, hh, ll, k, d):
+                    k_conf = k
+                    break
             k += 1
-        if entry is None:
+        if k_ins is None:
+            continue
+        k_entry = k_conf if k_conf is not None else k_ins
+        entry = float(c[k_entry])
+        checks = [struct[i] == d, bool(bos[i]), bool(z["caused_bos"]), True, True,
+                  k_conf is not None, htf[i] == d,
+                  session_of(pack["t"][k_entry]) != "dead"]
+        passed = sum(checks)
+        if passed < 6:
             continue
         risk = abs(entry - sl)
         if risk <= 0:
             continue
         tp1 = entry + d * TP1_R * risk
-        res, r = _resolve_snr(entry, sl, tp1, pack, k, d)
+        res, r = _resolve_snr(entry, sl, tp1, pack, k_entry, d)
         if res is None:
             continue
         setups.append(dict(
-            t=pack["t"][k], i=int(k), dir="LONG" if d == 1 else "SHORT",
+            t=pack["t"][k_entry], i=int(k_entry), dir="LONG" if d == 1 else "SHORT",
             entry=round(entry, 1), sl=round(float(sl), 1),
             tp1=round(float(tp1), 1), outcome=res,
             r=(round(r, 2) if r is not None else None),
-            session=session_of(pack["t"][k]),
-            zone=[z["bottom"], z["top"]]))
-        last_bar = k
+            session=session_of(pack["t"][k_entry]),
+            zone=[z["bottom"], z["top"]],
+            grade={8: "A+", 7: "B+", 6: "C+"}[passed], passed=int(passed)))
+        last_bar = k_entry
     setups.sort(key=lambda s: s["t"])
     return setups, pack
 
@@ -402,10 +419,12 @@ def evaluate(candles15, candles_1h=None):
     tp2 = entry + d * TP2_R * risk
     ok = [struct_ok, bos_ok, origin_ok, True, touching, conf, htf_ok, sess_ok]
     passed = sum(ok)
-    grade = _grade(passed) or "—"
+    # a setup grade only exists while price is actually RETESTING the zone;
+    # an untouched fresh zone stays in the "arming" state
+    grade = (_grade(passed) or "—") if touching else "—"
     return dict(
         direction="LONG" if d == 1 else "SHORT",
-        passed=int(passed), grade=grade,
+        passed=int(passed), grade=grade, touching=bool(touching),
         active=bool(active and passed >= MIN_CHECKS_TRIGGER),
         session=sess, sessionLabel=SESSION_LABEL[sess],
         entry=round(entry, 2),
@@ -419,23 +438,33 @@ def evaluate(candles15, candles_1h=None):
 
 
 # ------------------------------------------------------------------ backtest
-def backtest_stats(candles15, min_grade="A"):
-    """Historical performance of SNR setups on the loaded 15m data."""
+def backtest_stats(candles15, min_grade="A+"):
+    """Historical performance of SNR setups on the loaded 15m data,
+    with a per-grade breakdown (A+ / B+ / C+)."""
     if not candles15 or len(candles15) < 200:
         return None
     key = f"{len(candles15)}:{candles15[-1]['t']}:{min_grade}"
     if _stats_cache["key"] == key:
         return _stats_cache["stats"]
-    need_conf = min_grade != "A"           # A+ = full rules incl. confirmation
-    setups, _pack = _scan_setups(candles15, need_confirmation=need_conf)
-    total = len(setups)
-    wins = sum(1 for s in setups if s["outcome"] == "win")
-    r_sum = sum(s["r"] or 0.0 for s in setups)
+    setups, _pack = _scan_setups(candles15)
+    thr = GRADE_ORDER.get(min_grade, 3)
+    sel = [s for s in setups if GRADE_ORDER.get(s["grade"], 0) >= thr]
+    total = len(sel)
+    wins = sum(1 for s in sel if s["outcome"] == "win")
+    r_sum = sum(s["r"] or 0.0 for s in sel)
+    by = {}
+    for g in ("A+", "B+", "C+"):
+        ss = [s for s in setups if s["grade"] == g]
+        gw = sum(1 for s in ss if s["outcome"] == "win")
+        gr = sum(s["r"] or 0.0 for s in ss)
+        by[g] = dict(setups=len(ss), wins=gw,
+                     winRate=round(gw / len(ss), 3) if ss else None,
+                     avgR=round(gr / len(ss), 3) if ss else None)
     stats = dict(setups=total, wins=wins, losses=total - wins,
                  winRate=round(wins / total, 3) if total else None,
                  avgR=round(r_sum / total, 3) if total else None,
                  window="last 60 days of 15m bars",
-                 tpAtr=TP1_R, slAtr=1.0, minChecks=8 if need_conf else 7)
+                 tpAtr=TP1_R, slAtr=1.0, minChecks=8, byGrade=by)
     _stats_cache.update(key=key, stats=stats)
     return stats
 
@@ -449,9 +478,9 @@ def recent_setups(candles15, lookback=380):
     key = (len(candles15), int(candles15[-1]["t"]))
     if _setups_cache["key"] == key:
         return _setups_cache["setups"]
-    setups, _pack = _scan_setups(candles15, need_confirmation=True)
+    setups, _pack = _scan_setups(candles15)
     n = len(candles15)
-    out = [s for s in setups if s["i"] >= n - lookback]
+    out = [s for s in setups if s["i"] >= n - lookback and s["grade"] == "A+"]
     _setups_cache["key"] = key
     _setups_cache["setups"] = out
     return out

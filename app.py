@@ -930,14 +930,14 @@ def _self_keepalive():
 
 
 def _background_loop():
-    try:
-        fundamentals.snapshot()               # warm the caches at startup
-    except Exception:  # noqa: BLE001
-        pass
     while True:
         try:
             _self_keepalive()
         except Exception:  # noqa: BLE001
+            pass
+        try:
+            fundamentals.snapshot()           # keep news/macro/calendar caches
+        except Exception:  # noqa: BLE001    # warm so user requests never wait
             pass
         for tf in data.TFS:
             try:

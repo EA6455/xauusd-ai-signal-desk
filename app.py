@@ -172,8 +172,14 @@ def alerts_snapshot():
         return STATE["alerts"][:30]
 
 
-def maybe_alert(tf, sig_type, price, score, conf):
-    """Fire an alert when the composite signal flips to BUY or SELL."""
+FLIP_REARM_MIN = 180              # same-direction re-alert needs 3h of quiet
+
+
+def maybe_alert(tf, sig_type, price, score, conf, atr=None):
+    """Fire an alert when the composite signal flips to BUY or SELL.
+    Sticky regimes mean this is a genuine reversal; a same-direction repeat
+    within FLIP_REARM_MIN is suppressed, and every alert carries reference
+    SL / TP levels (1.5xATR stop, 1:2 RR target) so it is actionable."""
     if sig_type not in ("BUY", "SELL"):
         with STATE_LOCK:
             if STATE["lastSig"].get(tf) not in (None, "HOLD"):
@@ -182,15 +188,30 @@ def maybe_alert(tf, sig_type, price, score, conf):
         return
     with STATE_LOCK:
         prev = STATE["lastSig"].get(tf)
+        last_t = STATE.get("lastSigT", {}).get(tf, 0)
         if prev == sig_type:
             return
+        now = time.time()
+        if prev is not None and now - last_t < FLIP_REARM_MIN * 60:
+            # too soon after the last alert from this timeframe: track the
+            # stance silently so no stale alert fires later
+            STATE["lastSig"][tf] = sig_type
+            _save_state()
+            return
+        STATE.setdefault("lastSigT", {})[tf] = now
         STATE["lastSig"][tf] = sig_type
         first = prev is None
+        d = 1 if sig_type == "BUY" else -1
+        levels = ""
+        if atr and atr > 0:
+            sl = price - d * 1.5 * atr
+            tp = price + d * 3.0 * atr
+            levels = (f" · SL {sl:,.1f} · TP {tp:,.1f} (1:2 ref)")
         a = dict(id=_next_id(), time=int(time.time()), tf=tf, type=sig_type,
                  price=round(float(price), 2), score=round(float(score), 3),
                  confidence=round(float(conf), 3),
                  msg=f"XAUUSD {tf} {sig_type} @ {price:,.2f} · "
-                     f"conf {conf * 100:.0f}% · score {score:+.2f}"
+                     f"conf {conf * 100:.0f}% · score {score:+.2f}{levels}"
                      + (" · initial stance" if first else " · signal flip"))
         STATE["alerts"].insert(0, a)
         del STATE["alerts"][100:]
@@ -554,10 +575,18 @@ def build_payload(tf, d):
         else:
             scores[i] = rs
 
+    # Sticky regime (hysteresis): once BUY, stay BUY until the SELL threshold
+    # is crossed (and vice versa) — a score hovering around one threshold no
+    # longer flip-flops the stance, so alerts only fire on genuine reversals.
     sig = np.zeros(n, int)
     v = ~np.isnan(scores)
-    sig[v & (scores >= BUY_TH)] = 1
-    sig[v & (scores <= SELL_TH)] = -1
+    regime = 0
+    for i in range(n):
+        if v[i] and scores[i] >= BUY_TH:
+            regime = 1
+        elif v[i] and scores[i] <= SELL_TH:
+            regime = -1
+        sig[i] = regime
 
     # historical signal flips (markers on the chart)
     markers = []
@@ -658,7 +687,8 @@ def build_payload(tf, d):
             traceback.print_exc()
             payload["entry"] = None
             payload["entryStats"] = None
-    maybe_alert(tf, sig_type, float(c[-1]), cur_score, conf)
+    maybe_alert(tf, sig_type, float(c[-1]), cur_score, conf,
+                atr=float(p["atr"][i]) if p["atr"][i] else None)
     return payload
 
 

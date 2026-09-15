@@ -372,7 +372,7 @@ const INITIAL = {{ payload|tojson }};
 
   // ---------- realtime ticks ----------
   function animatePrice(el, from, to){
-    const t0 = performance.now(), dur = 90;
+    const t0 = performance.now(), dur = 45;
     function step(t){
       const k = Math.min(1, (t - t0) / dur);
       el.textContent = fmtP(from + (to - from) * k);
@@ -419,6 +419,30 @@ const INITIAL = {{ payload|tojson }};
     $('mktBadge').className = 'livebadge' + (closed ? ' stale' : '');
     $('mktTxt').textContent = closed ? 'GOLD CLOSED' : 'GOLD OPEN';
     renderTracker(); drawChart();
+  }
+
+  function initRealtime(){
+    // Preferred: Server-Sent Events — the server PUSHES every price change
+    // the instant the exchange book moves. No request cycle, no polling.
+    // Falls back to the long-poll loop if the stream can't connect.
+    let es = null, fails = 0, got = false;
+    try{
+      es = new EventSource('/api/stream');
+      es.onmessage = ev => {
+        got = true; fails = 0;
+        try{
+          const j = JSON.parse(ev.data);
+          if(j.price != null) applyTick(j.price, j.source, j.t);
+        }catch(e){}
+      };
+      es.onerror = () => {
+        fails++;
+        if(fails > 4 && !got){          // stream unusable (proxy?) -> long-poll
+          try{ es.close(); }catch(e){}
+          waitLoop();
+        }
+      };
+    }catch(e){ waitLoop(); }
   }
 
   async function waitLoop(){
@@ -1011,7 +1035,7 @@ const INITIAL = {{ payload|tojson }};
   pollTimer = setTimeout(() => load(false), 8000);
   clearTimeout(entryTimer);
   entryTimer = setTimeout(loadEntry, state.entry ? 20000 : 3000);
-  waitLoop();
+  initRealtime();
 })();
 </script>
 </body>

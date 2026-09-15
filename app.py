@@ -1133,20 +1133,26 @@ def api_stream():
     and fans the value out to every connected client."""
     def gen():
         started = time.time()
+        last_sent = None
+        last_yield = time.time()
         while True:
             try:
-                p, src = tick_spot()
+                p, src = tick_spot(max_age=0.05)
             except Exception:  # noqa: BLE001
                 p, src = None, None
             now = time.time()
-            if p is not None:
+            if p is not None and (last_sent is None or abs(p - last_sent) >= 0.01):
+                last_sent = p
+                last_yield = now
                 yield ("data: " + json.dumps(
                     dict(price=round(p, 2), source=src, t=int(now))) + "\n\n")
-            else:
-                yield ": keepalive\n\n"
             if now - started > 3300:      # ~55 min; EventSource auto-reconnects
                 break
-            time.sleep(0.8)
+            if now - last_yield > 14:     # idle keepalive for proxies
+                last_yield = now
+                yield ": keepalive\n\n"
+            # wake the INSTANT the exchange book changes (event-driven push)
+            wsfeed.wait_for_change(15.0)
     resp = Response(gen(), mimetype="text/event-stream")
     resp.headers["Cache-Control"] = "no-cache"
     resp.headers["X-Accel-Buffering"] = "no"

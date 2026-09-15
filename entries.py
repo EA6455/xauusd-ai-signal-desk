@@ -92,15 +92,37 @@ def htf_trend_live(candles_1h):
     return 0
 
 
-def checks_at(p, i, trend):
-    """(long_checks[8], short_checks[8]) at bar i — strictly causal."""
+def _vol_ok_series(p):
+    """vol_ok check for every bar in one vectorized pass (mirrors the
+    per-bar np.median in checks_at, which is far too slow to call 4,500×)."""
+    c, atr = np.asarray(p["c"], float), np.asarray(p["atr"], float)
+    n = len(c)
+    out = np.zeros(n, dtype=bool)
+    if n == 0:
+        return out
+    ratios = atr / c
+    if n >= 50:
+        # med[k] = median(ratios[k:k+50]) = window ending at bar k+49
+        med = np.median(np.lib.stride_tricks.sliding_window_view(ratios, 50), axis=1)
+        out[49:] = ratios[49:] >= med
+    for i in range(min(49, n)):
+        out[i] = bool(ratios[i] >= np.median(ratios[:i + 1]))
+    return out
+
+
+def checks_at(p, i, trend, vol=None):
+    """(long_checks[8], short_checks[8]) at bar i — strictly causal.
+    `vol` may carry a precomputed _vol_ok_series(p) to skip the per-bar median."""
     c, e9, e21 = p["c"], p["e9"], p["e21"]
     hist, rng = p["macd_hist"], p["h"][i] - p["l"][i]
     atr_i = p["atr"][i]
     pull = abs(c[i] - e21[i]) <= 1.3 * atr_i
     rsi_win = 38.0 <= p["rsi"][i] <= 62.0
-    lo = max(0, i - 49)
-    vol_ok = (atr_i / c[i]) >= float(np.median(p["atr"][lo:i + 1] / c[lo:i + 1]))
+    if vol is None:
+        lo = max(0, i - 49)
+        vol_ok = (atr_i / c[i]) >= float(np.median(p["atr"][lo:i + 1] / c[lo:i + 1]))
+    else:
+        vol_ok = bool(vol[i])
     conf_l = rng > 0 and (c[i] - p["l"][i]) / rng >= 0.40
     conf_s = rng > 0 and (p["h"][i] - c[i]) / rng >= 0.40
     longs = [trend == 1, e9[i] > e21[i], pull, rsi_win,
@@ -193,6 +215,8 @@ def backtest_stats(candles15, min_grade="A"):
     p = ml.indicator_pack(candles15)
     c = p["c"]
     n = len(c)
+    trends = _htf_trend_series(candles15)
+    vol = _vol_ok_series(p)
     wins = losses = 0
     r_sum = 0.0
     last_dir, cooldown = 0, 0
@@ -200,8 +224,8 @@ def backtest_stats(candles15, min_grade="A"):
         if cooldown > 0:
             cooldown -= 1
             continue
-        trend = htf_trend_from_15m(candles15, i)
-        longs, shorts = checks_at(p, i, trend)
+        trend = trends[i]
+        longs, shorts = checks_at(p, i, trend, vol)
         nl, ns = sum(longs), sum(shorts)
         d, best = (1, nl) if nl >= ns else (-1, ns)
         if best < need:
@@ -278,13 +302,14 @@ def recent_setups(candles15, lookback=380):
     c = p["c"]
     n = len(c)
     trends = _htf_trend_series(candles15)
+    vol = _vol_ok_series(p)
     cooldown = 0
     for i in range(max(60, n - lookback), n - 1):
         if cooldown > 0:
             cooldown -= 1
             continue
         trend = trends[i]
-        longs, shorts = checks_at(p, i, trend)
+        longs, shorts = checks_at(p, i, trend, vol)
         nl, ns = sum(longs), sum(shorts)
         d, best = (1, nl) if nl >= ns else (-1, ns)
         if best < 8:

@@ -584,10 +584,20 @@ def tick_spot(max_age=0.8):
                 alpha = 0.35 if warm < 12 else 0.15
                 ema_f = fs if prev is None else prev + alpha * (fs - prev)
                 _anchor_mem.update(ema_f=ema_f, warm_f=warm + 1, last_f_ts=now)
-        # ---- blend: level truth (A) + real-time tracking (B)
+        # ---- blend: level truth (A) + real-time tracking (B).
+        # The futures level (B) reacts within milliseconds; gold-api (A) trails
+        # the true spot by 30-60s. So B gets the larger weight, and even more
+        # while A's quote is aging — the displayed price sticks to the LIVE
+        # market instead of trailing the slow spot feed.
         ea, ef = _anchor_mem.get("ema"), _anchor_mem.get("ema_f")
         if ea is not None and ef is not None:
-            _anchor_mem["offset"] = 0.5 * ea + 0.5 * ef
+            ga_age = 999.0
+            if spot and spot.get("updatedAt"):
+                _ts = _feed_epoch(spot["updatedAt"])
+                if _ts:
+                    ga_age = now - _ts
+            w_f = 0.60 if ga_age <= 25 else 0.72
+            _anchor_mem["offset"] = (1.0 - w_f) * ea + w_f * ef
         elif ea is not None:
             _anchor_mem["offset"] = ea
         elif ef is not None:

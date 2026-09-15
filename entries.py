@@ -225,21 +225,65 @@ def backtest_stats(candles15, min_grade="A"):
     return stats
 
 
+def _htf_trend_series(candles):
+    """Per-15m-bar trend of the last COMPLETED 1H bar (no look-ahead).
+    Exactly mirrors htf_trend_from_15m for every index, but in ONE O(n) pass:
+    hourly closes are folded incrementally into running EMA 9 / EMA 21 state
+    (identical to ml.ema seeded at the first close)."""
+    n = len(candles)
+    out = [0] * n
+    a9, a21 = 2.0 / 10.0, 2.0 / 22.0     # ml.ema(x, 9) / ml.ema(x, 21) alphas
+    e9 = e21 = last_close = None
+    prev_hb = None
+    cnt = 0
+    trend = 0
+    for i in range(n):
+        hb = (candles[i]["t"] // 3600) * 3600
+        if prev_hb is not None and hb != prev_hb:
+            # the hour prev_hb just completed, closing at last_close
+            cnt += 1
+            if cnt == 1:
+                e9 = e21 = last_close
+            else:
+                e9 = e9 + a9 * (last_close - e9)
+                e21 = e21 + a21 * (last_close - e21)
+            if cnt >= 25:                 # same gate as htf_trend_from_15m
+                if e9 > e21 and last_close > e21:
+                    trend = 1
+                elif e9 < e21 and last_close < e21:
+                    trend = -1
+                else:
+                    trend = 0
+        prev_hb = hb
+        last_close = candles[i]["c"]
+        out[i] = trend
+    return out
+
+
+_setups_cache = {"key": None, "setups": []}
+
+
 def recent_setups(candles15, lookback=380):
     """Chronological list of full-confluence (8/8) setups with resolved outcomes.
-    Used for chart markers and the live tracker's session statistics."""
+    Used for chart markers and the live tracker's session statistics.
+    Results are cached per (bar count, last bar time): the scan excludes the
+    forming bar, so nothing changes until a new 15m bar opens."""
     out = []
     if not candles15 or len(candles15) < 200:
         return out
+    key = (len(candles15), int(candles15[-1]["t"]))
+    if _setups_cache["key"] == key:
+        return _setups_cache["setups"]
     p = ml.indicator_pack(candles15)
     c = p["c"]
     n = len(c)
+    trends = _htf_trend_series(candles15)
     cooldown = 0
     for i in range(max(60, n - lookback), n - 1):
         if cooldown > 0:
             cooldown -= 1
             continue
-        trend = htf_trend_from_15m(candles15, i)
+        trend = trends[i]
         longs, shorts = checks_at(p, i, trend)
         nl, ns = sum(longs), sum(shorts)
         d, best = (1, nl) if nl >= ns else (-1, ns)
@@ -254,6 +298,8 @@ def recent_setups(candles15, lookback=380):
             outcome=res, r=(round(r, 2) if r is not None else None),
             session=session_of(int(candles15[i]["t"]))))
         cooldown = 4
+    _setups_cache["key"] = key
+    _setups_cache["setups"] = out
     return out
 
 

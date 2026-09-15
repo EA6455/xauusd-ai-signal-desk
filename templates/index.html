@@ -141,6 +141,16 @@
   .pa-x{border:none; background:transparent; color:var(--muted); padding:2px 6px; font-size:13px}
   .pa-x:hover{color:var(--red)}
 
+  .fn-macro{display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:6px}
+  .fn-chip{background:var(--card2); border:1px solid var(--border); border-radius:8px;
+    padding:5px 10px; font-size:12.5px; white-space:nowrap}
+  .fn-chip b.up{color:var(--green)} .fn-chip b.dn{color:var(--red)}
+  .fn-sec{font-size:10.5px; letter-spacing:1.2px; text-transform:uppercase;
+    color:var(--muted); margin:12px 0 4px; font-weight:700}
+  .fn-row{display:flex; align-items:baseline; gap:10px; padding:6px 0;
+    border-top:1px solid var(--border); font-size:13px; flex-wrap:wrap}
+  .fn-row .al-time{color:var(--muted); font-size:11.5px; white-space:nowrap; min-width:52px}
+  .fn-note{color:#c7cdd9; line-height:1.5}
   #alerts{max-height:300px; overflow-y:auto; display:flex; flex-direction:column; gap:2px}
   .al{display:flex; align-items:baseline; gap:10px; padding:9px 6px; border-top:1px solid var(--border); font-size:13px; flex-wrap:wrap}
   .al-time{color:var(--muted); font-size:11.5px; white-space:nowrap}
@@ -220,6 +230,11 @@
         <div class="card-head"><h2>Alert Feed</h2><span class="muted small" id="alertsCount"></span></div>
         <div id="alerts"></div>
       </div>
+
+      <div class="card" id="fnCard">
+        <div class="card-head"><h2>Fundamentals &amp; News</h2><span class="muted small" id="fnNext"></span></div>
+        <div id="fnBody"><div class="muted small">loading macro &amp; news…</div></div>
+      </div>
     </div>
 
     <!-- ================= right column ================= -->
@@ -285,6 +300,10 @@
       stop to breakeven, runner to TP2 (+2.5R). You get alerts at every step, and the
       outcome history builds up on the card.</li>
     </ul>
+    <p style="margin-top:6px"><b>Fundamentals</b> — economic calendar (CPI, FOMC, NFP...),
+    dollar index &amp; US 10Y yields, and gold-relevant headlines filtered from
+    WatcherGuru + Google News. High-impact events send a pre-alert 30 minutes ahead;
+    breaking gold news is forwarded (rate-limited).</p>
     <p style="margin-top:6px">Prices are <b>spot-aligned</b> to match XAU/USD at your broker.
     Backtest stats shown on the cards are measured on the last 60 days of 15m data.</p>
     <div class="disc">⚠️ <b>Disclaimer.</b> Educational tool, not financial advice.
@@ -531,6 +550,55 @@ const INITIAL = {{ payload|tojson }};
     entryTimer = setTimeout(loadEntry, 20000);
   }
 
+  // ---------- fundamentals & news ----------
+  function renderFundamentals(){
+    const f = state.data && state.data.fundamentals;
+    const body = $('fnBody');
+    if(!f){
+      $('fnNext').textContent = '';
+      body.innerHTML = '<div class="muted small">Fundamentals unavailable right now.</div>';
+      return;
+    }
+    let h = '';
+    const m = f.macro || {};
+    if(m.dxy || m.us10y){
+      h += '<div class="fn-macro">';
+      if(m.dxy) h += '<span class="fn-chip">💵 Dollar ' + m.dxy.price.toFixed(2) +
+        ' <b class="' + (m.dxy.chg >= 0 ? 'dn' : 'up') + '">' +
+        (m.dxy.chg >= 0 ? '+' : '') + m.dxy.chg.toFixed(2) + '</b></span>';
+      if(m.us10y) h += '<span class="fn-chip">📈 US 10Y ' + m.us10y.price.toFixed(2) +
+        '% <b class="' + (m.us10y.chg >= 0 ? 'dn' : 'up') + '">' +
+        (m.us10y.chg >= 0 ? '+' : '') + m.us10y.chg.toFixed(2) + '</b></span>';
+      h += '<span class="small muted">dollar / yields up = headwind for gold</span></div>';
+    }
+    if((f.events || []).length){
+      h += '<div class="fn-sec">📅 High-impact events · next 48h</div>';
+      f.events.forEach(function(e){
+        const t = e.minutesTo >= 60
+          ? (e.minutesTo / 60).toFixed(e.minutesTo >= 600 ? 0 : 1) + 'h' : e.minutesTo + 'm';
+        h += '<div class="fn-row"><span class="al-time mono">in ' + t + '</span>' +
+             '<span class="fn-note">' + e.title + ' · ' + e.country + '</span>' +
+             (e.forecast ? '<span class="small muted">fc ' + e.forecast + '</span>' : '') +
+             '<span class="ibadge ' + (e.impact === 'High' ? 'bear' : 'neutral') + '">' +
+             e.impact + '</span></div>';
+      });
+    }
+    if((f.news || []).length){
+      h += '<div class="fn-sec">📰 Gold-relevant headlines</div>';
+      f.news.forEach(function(n){
+        h += '<div class="fn-row"><span class="al-time mono">' + fmtDT(n[0]) + '</span>' +
+             '<span class="fn-note">' + n[1] + '</span>' +
+             '<span class="small muted" style="margin-left:auto">' + n[2] + '</span></div>';
+      });
+    }
+    body.innerHTML = h || '<div class="muted small">No fundamental data loaded.</div>';
+    const nh = f.nextHigh;
+    $('fnNext').textContent = nh
+      ? 'next: ' + nh.title + ' in ' + (nh.minutesTo >= 60
+          ? (nh.minutesTo / 60).toFixed(1) + 'h' : nh.minutesTo + 'm')
+      : '';
+  }
+
   // ---------- signal tracker ----------
   function renderTracker(){
     const d = state.data, body = $('trkBody'), statsEl = $('trkStats');
@@ -680,7 +748,7 @@ const INITIAL = {{ payload|tojson }};
         '-bar hit rate: ' + (hr.wins / hr.total * 100).toFixed(0) + '% (' + hr.wins + '/' + hr.total + ')'
       : 'No historical signal flips in the loaded window.';
 
-    renderNote(); renderTracker(); renderAlerts(); renderPa();
+    renderNote(); renderTracker(); renderAlerts(); renderPa(); renderFundamentals();
     if(d.entry){ renderEntry(); }
     drawChart();
   }
@@ -694,7 +762,8 @@ const INITIAL = {{ payload|tojson }};
       const cls = isBuy ? 'buy' : isSell ? 'sell' : 'pa';
       const icon = a.type === 'TP1_HIT' ? '✅' : a.type === 'TP2_HIT' ? '🎯' :
                    a.type === 'SL_HIT' ? '🛑' : a.type === 'BE_STOP' ? '⚖️' :
-                   a.type === 'TIMEOUT' ? '⏱' :
+                   a.type === 'TIMEOUT' ? '⏱' : a.type === 'EVENT' ? '📅' :
+                   a.type === 'NEWS' ? '📰' :
                    a.type === 'BUY' ? '🟢' : a.type === 'SELL' ? '🔴' :
                    a.type.indexOf('ENTRY') === 0 ? '🎯' : '⏰';
       return '<div class="al"><span class="al-time mono">' + fmtDT(a.time) + '</span>' +

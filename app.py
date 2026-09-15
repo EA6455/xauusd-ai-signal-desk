@@ -19,6 +19,7 @@ from flask import Flask, Response, jsonify, render_template, request
 
 import data
 import entries
+import fundamentals
 import ml
 import narrative
 import wsfeed
@@ -63,7 +64,8 @@ def app_version():
 # ------------------------------------------------------------------ state
 STATE_LOCK = threading.Lock()
 STATE = dict(alerts=[], priceAlerts=[], lastSig={}, lastPrice=None,
-             liveTrade=None, tradeHistory=[])
+             liveTrade=None, tradeHistory=[], lastSigT={}, lastSetup=None,
+             lastSetupT=0.0, eventAlerted=[], newsSeen=None)
 try:
     with open(STATE_PATH) as f:
         _loaded = json.load(f)
@@ -734,6 +736,10 @@ def build_payload(tf, d):
         alerts=alerts_snapshot(),
         priceAlerts=None,   # filled by refresh() under the state lock
     )
+    try:
+        payload["fundamentals"] = fundamentals.snapshot()
+    except Exception:  # noqa: BLE001
+        payload["fundamentals"] = None
     if tf == "15m":
         try:
             d1h = data.get_candles("60m")
@@ -800,7 +806,85 @@ def refresh(tf, force=False):
 _bg_started = False
 
 
+# ------------------------------------------------------------------ fundamentals
+NEWS_FWD_MIN_GAP = 15 * 60        # max one forwarded news per 15 minutes
+EVENT_PRE_MIN = 30                # pre-alert this many minutes before an event
+
+
+def _web_alert(typ, msg, price=None):
+    with STATE_LOCK:
+        a = dict(id=_next_id(), time=int(time.time()), tf="—", type=typ,
+                 price=price, score=0.0, confidence=None, msg=msg)
+        STATE["alerts"].insert(0, a)
+        del STATE["alerts"][100:]
+        _save_state()
+    return a
+
+
+def fundamental_watch():
+    """Fundamental alerts: a pre-alert shortly before high-impact USD events
+    (CPI, FOMC, NFP...) and forwarding of gold-relevant breaking news from
+    WatcherGuru. Both rate-limited and deduped — no spam."""
+    now = time.time()
+    # ---- high-impact event pre-alerts ----
+    try:
+        for e in fundamentals.upcoming(hours=1, impacts=("High",)):
+            key = f"{e['ts']}:{e['title']}"
+            if 0 <= e["minutesTo"] <= EVENT_PRE_MIN and key not in STATE["eventAlerted"]:
+                STATE["eventAlerted"].append(key)
+                del STATE["eventAlerted"][:-60]
+                _save_state()
+                when = time.strftime("%H:%M", time.gmtime(e["ts"]))
+                fc = (f" · fc {e['forecast']} · prev {e['previous']}"
+                      if (e["forecast"] or e["previous"]) else "")
+                _web_alert("EVENT", f"{e['title']} ({e['country']}) in ~"
+                           f"{e['minutesTo']} min · {when} UTC{fc}")
+                _notify(f"📅 HIGH-IMPACT EVENT — {e['title']}\n\n"
+                        f"⏰ Starts in ~{e['minutesTo']} min ({when} UTC)\n"
+                        f"🌍 Currency: {e['country']}{fc}\n\n"
+                        f"💰 XAUUSD — expect volatility")
+    except Exception:  # noqa: BLE001
+        pass
+    # ---- news forwarding (WatcherGuru, filtered for gold) ----
+    try:
+        seen = STATE.get("newsSeen") or {"lastTs": 0, "lastFwd": 0.0, "keys": []}
+        items = fundamentals.watcher_headlines()
+        if not items:
+            return
+        newest = max(ts for ts, _t in items)
+        if not seen.get("lastTs"):
+            # first run after a start: set the baseline, no history dump
+            STATE["newsSeen"] = dict(seen, lastTs=newest)
+            _save_state()
+            return
+        if now - (seen.get("lastFwd") or 0) < NEWS_FWD_MIN_GAP:
+            STATE["newsSeen"] = dict(seen, lastTs=newest)
+            _save_state()
+            return
+        for ts, txt in sorted(items, key=lambda x: -x[0]):
+            if ts <= seen["lastTs"] or now - ts > 45 * 60:
+                continue                      # old news
+            if txt in (seen.get("keys") or []):
+                continue                      # already forwarded
+            if fundamentals.gold_relevant(txt):
+                keys = (seen.get("keys") or [])[-30:] + [txt]
+                STATE["newsSeen"] = dict(lastTs=newest, lastFwd=now, keys=keys)
+                _save_state()
+                _web_alert("NEWS", f"WatcherGuru · {txt[:140]}")
+                _notify(f"📰 GOLD-RELEVANT NEWS · WatcherGuru\n\n{txt[:400]}")
+                break
+        else:
+            STATE["newsSeen"] = dict(seen, lastTs=newest)
+            _save_state()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _background_loop():
+    try:
+        fundamentals.snapshot()               # warm the caches at startup
+    except Exception:  # noqa: BLE001
+        pass
     while True:
         for tf in data.TFS:
             try:
@@ -810,6 +894,10 @@ def _background_loop():
             time.sleep(1)
         try:
             update_trade_tracker()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            fundamental_watch()
         except Exception:  # noqa: BLE001
             pass
         time.sleep(6)

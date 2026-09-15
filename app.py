@@ -429,7 +429,7 @@ def spot_reference():
 
 _tick_mem = {"t": 0.0, "price": None, "src": None}
 _okx_tick_mem = {"t": 0.0, "price": None}
-_basis_mem = {"t": 0.0, "value": 0.0, "valid": False}
+_basis_mem = {"t": 0.0, "value": 0.0, "valid": False, "ema": None, "bwarm": 0}
 _quote_mem = {"t": 0.0, "price": None}
 
 
@@ -471,7 +471,8 @@ def _yahoo_gc_quote():
     return None, None
 
 
-_anchor_mem = {"offset": 0.0, "t": 0.0, "ema": None, "last_ts": None}
+_anchor_mem = {"offset": 0.0, "t": 0.0, "ema": None, "last_ts": None,
+               "warm": 0, "ema_f": None, "warm_f": 0, "last_f_ts": 0.0}
 _frozen_mem = {"price": None}
 
 
@@ -548,6 +549,7 @@ def tick_spot(max_age=0.8):
     #    follows the live book instead of trailing the slow spot feed.
     wm, _wt = wsfeed.mid(max_age=30)
     if wm:
+        # ---- sample A: timestamp-matched gold-api premium (level truth, slow)
         matched_ts = None
         anchor_target = None
         if spot and spot.get("updatedAt"):
@@ -559,19 +561,38 @@ def tick_spot(max_age=0.8):
                     matched_ts = ts
         if anchor_target is None and spot:
             anchor_target = spot["price"] - wm
-        if anchor_target is None and q and basis_ok:
-            anchor_target = (q - _basis_mem["value"]) - wm
         if anchor_target is not None and abs(anchor_target) <= 8.0:
             if matched_ts is not None and matched_ts != _anchor_mem.get("last_ts"):
-                # new timestamp-matched premium sample -> smooth across the
-                # slow (~30s) gold-api steps so the level doesn't wobble
+                # fast warm-up after a start, then a slow steady EMA so the
+                # level rides out gold-api's transient lag during fast moves
                 prev = _anchor_mem.get("ema")
-                ema = anchor_target if prev is None else 0.7 * prev + 0.3 * anchor_target
-                _anchor_mem.update(offset=ema, ema=ema, t=now, last_ts=matched_ts)
+                warm = _anchor_mem.get("warm", 0)
+                alpha = 0.35 if warm < 8 else 0.05
+                ema = anchor_target if prev is None else prev + alpha * (anchor_target - prev)
+                _anchor_mem.update(ema=ema, warm=warm + 1, last_ts=matched_ts)
             elif matched_ts is None:
-                _anchor_mem.update(offset=anchor_target, t=now)
                 if _anchor_mem.get("ema") is None:
                     _anchor_mem["ema"] = anchor_target
+                    _anchor_mem["warm"] = _anchor_mem.get("warm", 0) + 1
+        # ---- sample B: real-time futures premium (GC=F is near-instant; the
+        #      futures basis is stable, so q - basis tracks spot with no lag)
+        if q and basis_ok:
+            fs = (q - _basis_mem["value"]) - wm
+            if abs(fs) <= 8.0 and now - _anchor_mem.get("last_f_ts", 0) >= 5:
+                prev = _anchor_mem.get("ema_f")
+                warm = _anchor_mem.get("warm_f", 0)
+                alpha = 0.35 if warm < 12 else 0.08
+                ema_f = fs if prev is None else prev + alpha * (fs - prev)
+                _anchor_mem.update(ema_f=ema_f, warm_f=warm + 1, last_f_ts=now)
+        # ---- blend: level truth (A) + real-time tracking (B)
+        ea, ef = _anchor_mem.get("ema"), _anchor_mem.get("ema_f")
+        if ea is not None and ef is not None:
+            _anchor_mem["offset"] = 0.5 * ea + 0.5 * ef
+        elif ea is not None:
+            _anchor_mem["offset"] = ea
+        elif ef is not None:
+            _anchor_mem["offset"] = ef
+        _anchor_mem["t"] = now
         off = _anchor_mem["offset"]
         if abs(off) <= 8.0:
             price, src = round(wm + off, 2), "realtime feed"
@@ -609,7 +630,13 @@ def build_payload(tf, d):
     else:
         candles = raw
         source = d["source"]
-    _basis_mem.update(t=time.time(), value=adjust, valid=bool(adjust))
+    # smooth the basis slowly (roll drifts over days) so the real-time
+    # futures anchor sample isn't contaminated by any single spot quote
+    prev_b = _basis_mem.get("ema")
+    bw = _basis_mem.get("bwarm", 0)
+    b_ema = adjust if prev_b is None else prev_b + (0.2 if bw < 10 else 0.02) * (adjust - prev_b)
+    _basis_mem.update(t=time.time(), value=round(b_ema, 2), ema=b_ema,
+                      valid=bool(adjust), bwarm=bw + 1)
 
     # live-tick patch: the FORMING candle and the payload price follow the
     # realtime feed (ws book + matched anchor), not the candle source's
@@ -786,7 +813,9 @@ def refresh(tf, force=False):
                 st.payload["stale"] = True
                 return st.payload
             return dict(error="data source unavailable — retrying", tf=tf)
-        if d["changed"] or st.payload is None:
+        if (d.get("changed") or st.payload is None
+                or d.get("fetchedAt") != getattr(st, "lastFetch", None)):
+            st.lastFetch = d.get("fetchedAt")
             prev_price = STATE.get("lastPrice")
             st.payload = build_payload(tf, d)
             check_price_alerts(prev_price, st.payload["price"])
@@ -880,12 +909,36 @@ def fundamental_watch():
         pass
 
 
+_ping_mem = {"t": 0.0}
+
+
+def _self_keepalive():
+    """Ping our own public URL every 5 minutes so the free-tier service
+    never spins down (a cold start costs the visitor ~50 seconds)."""
+    url = os.environ.get("RENDER_EXTERNAL_URL")
+    if not url:
+        return                                # not on Render — nothing to do
+    now = time.time()
+    if now - _ping_mem["t"] < 300:
+        return
+    _ping_mem["t"] = now
+    try:
+        import urllib.request
+        urllib.request.urlopen(url.rstrip("/") + "/api/health", timeout=20).read()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _background_loop():
     try:
         fundamentals.snapshot()               # warm the caches at startup
     except Exception:  # noqa: BLE001
         pass
     while True:
+        try:
+            _self_keepalive()
+        except Exception:  # noqa: BLE001
+            pass
         for tf in data.TFS:
             try:
                 refresh(tf)

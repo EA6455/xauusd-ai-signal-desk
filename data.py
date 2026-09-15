@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -154,6 +155,10 @@ def _cache_path(tf):
     return os.path.join(CACHE_DIR, f"{tf}.json")
 
 
+_bg_lock = threading.Lock()
+_bg_refreshing = set()
+
+
 def get_candles(tf, force=False):
     """Return dict(candles, source, stale, fetchedAt, changed[, error]).
 
@@ -166,6 +171,24 @@ def get_candles(tf, force=False):
     st = _mem.get(tf)
     now = time.time()
     if not force and st and now - st["fetchedAt"] < cfg["ttl"]:
+        return dict(st, changed=False)
+
+    # stale-while-revalidate: a recently-expired cache is served INSTANTLY
+    # while a background thread refreshes it — /api/data never blocks on a
+    # slow upstream (Yahoo can take 1-3s). One refresh per tf at a time.
+    if not force and st and now - st["fetchedAt"] < cfg["ttl"] * 5:
+        with _bg_lock:
+            if tf not in _bg_refreshing:
+                _bg_refreshing.add(tf)
+
+                def _bg(t=tf):
+                    try:
+                        get_candles(t, force=True)
+                    finally:
+                        with _bg_lock:
+                            _bg_refreshing.discard(t)
+
+                threading.Thread(target=_bg, daemon=True).start()
         return dict(st, changed=False)
 
     candles = None

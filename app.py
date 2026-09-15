@@ -33,8 +33,18 @@ RULES_MIX = 1.0 - MODEL_MIX
 BUY_TH, SELL_TH = 0.20, -0.20       # composite-score thresholds
 WINDOW = {"15m": 180, "60m": 180, "1d": 240}   # bars shown on the chart
 
-TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-TG_CHAT = os.environ.get("TELEGRAM_CHAT_ID", "")
+def _tg_secret(fname):
+    """Bot token / chat id from a local file next to the app (not committed),
+    so self-hosted instances work without environment plumbing."""
+    try:
+        with open(os.path.join(BASE, fname)) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "") or _tg_secret("telegram_token")
+TG_CHAT = os.environ.get("TELEGRAM_CHAT_ID", "") or _tg_secret("telegram_chat")
 
 # ------------------------------------------------------------------ version
 def app_version():

@@ -802,7 +802,7 @@ class TFState:
 tf_states = {tf: TFState() for tf in data.TFS}
 
 
-def refresh(tf, force=False):
+def refresh(tf, force=False, allow_build=True):
     if tf not in data.TFS:
         return dict(error=f"unknown timeframe {tf}")
     st = tf_states[tf]
@@ -823,7 +823,7 @@ def refresh(tf, force=False):
                     and (last_bar != getattr(st, "lastBar", None)
                          or time.time() - getattr(st, "builtAt", 0.0) > 45)))
         building = getattr(st, "building", False)
-    if need and not building:
+    if need and not building and allow_build:
         st.building = True
         try:
             payload = build_payload(tf, d)
@@ -1079,7 +1079,9 @@ def api_data():
         return jsonify(error=f"unknown timeframe {tf}"), 400
     force = request.args.get("force") == "1"
     start_background()
-    return jsonify(refresh(tf, force=force))
+    # user requests never trigger heavy builds — the background loop owns
+    # them; users always get the cached payload with fresh STATE attached
+    return jsonify(refresh(tf, force=force, allow_build=False))
 
 
 @app.route("/api/price-alerts", methods=["POST"])

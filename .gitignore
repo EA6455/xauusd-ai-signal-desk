@@ -1,0 +1,10 @@
+state.json
+bg.lock
+cache/
+__pycache__/
+*.pyc
+ngrok_token
+ngrok_domain
+serveo_key*
+serveo.sh
+.env

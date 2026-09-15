@@ -813,15 +813,33 @@ def refresh(tf, force=False):
                 st.payload["stale"] = True
                 return st.payload
             return dict(error="data source unavailable — retrying", tf=tf)
-        if (d.get("changed") or st.payload is None
-                or d.get("fetchedAt") != getattr(st, "lastFetch", None)):
-            st.lastFetch = d.get("fetchedAt")
-            prev_price = STATE.get("lastPrice")
-            st.payload = build_payload(tf, d)
-            check_price_alerts(prev_price, st.payload["price"])
-            with STATE_LOCK:
-                STATE["lastPrice"] = st.payload["price"]
-                _save_state()
+        candles = d.get("candles") or []
+        last_bar = candles[-1]["t"] if candles else None
+        # rebuild only when it matters: first build, a true refetch with a NEW
+        # bar, or >45s since the last build — and never hold the tf lock
+        # during the (CPU-heavy) build, so user requests never queue behind it
+        need = (st.payload is None or d.get("changed")
+                or (d.get("fetchedAt") != getattr(st, "lastFetch", None)
+                    and (last_bar != getattr(st, "lastBar", None)
+                         or time.time() - getattr(st, "builtAt", 0.0) > 45)))
+        building = getattr(st, "building", False)
+    if need and not building:
+        st.building = True
+        try:
+            payload = build_payload(tf, d)
+            with st.lock:
+                st.lastFetch = d.get("fetchedAt")
+                st.lastBar = last_bar
+                st.builtAt = time.time()
+                prev_price = STATE.get("lastPrice")
+                st.payload = payload
+                check_price_alerts(prev_price, payload["price"])
+                with STATE_LOCK:
+                    STATE["lastPrice"] = payload["price"]
+                    _save_state()
+        finally:
+            st.building = False
+    with st.lock:
         with STATE_LOCK:
             if st.payload is not None:
                 st.payload["alerts"] = STATE["alerts"][:30]

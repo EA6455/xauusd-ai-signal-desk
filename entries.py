@@ -576,6 +576,198 @@ def sweep_view(e):
                       "back inside it — stops taken, reclaim in force"))
 
 
+# ---------------------------------------------------- daily liquidity rotation
+ROT_MAX_WAIT = 3           # bars allowed to close back inside after the pierce
+ROT_PIERCE_ATR = 0.05      # min wick penetration beyond the daily level
+ROT_SL_BUF_ATR = 0.10      # stop buffer beyond the sweep wick
+ROT_RESOLVE_BARS = 96      # rotation resolves within 24h
+# v1 (backtested, 60d of 15m): prior-day high = buyside liquidity, prior-day
+# low = sellside. Fading a FIRST-side sweep is a coin flip (48% TP1, only 29%
+# of runs ever reach the other side) — those stay web-feed watch lines. Once
+# BOTH pools are drained the picture changes: fading the second sweep won
+# 75% / +0.50R (n=8, small sample) on the standard TP1 0.75R half -> BE ->
+# TP2 1.5R runner profile. Entry at the reclaim close, SL beyond the sweep
+# wick; entering on a retest of the level instead was tested and is WORSE.
+
+
+def _rot_resolve(pack, i, d, entry, sl, tp1, tp2):
+    """Honest outcome of a rotation trade: half off at TP1, stop to BE,
+    runner to TP2. Same-bar SL+TP counts as a loss (conservative); a
+    timeout marks the remaining half to market."""
+    c, hh, ll = pack["c"], pack["h"], pack["l"]
+    n = pack["n"]
+    risk = abs(entry - sl)
+    if risk <= 0:
+        return None, None
+    end = min(n - 1, i + ROT_RESOLVE_BARS)
+    hit1 = None
+    for k in range(i + 1, end + 1):
+        if (ll[k] <= sl) if d == 1 else (hh[k] >= sl):
+            return "loss", -1.0
+        if (hh[k] >= tp1) if d == 1 else (ll[k] <= tp1):
+            hit1 = k
+            break
+    if hit1 is None:
+        r = d * (c[end] - entry) / risk
+        return ("win" if r > 0 else "loss"), round(r, 2)
+    rem = 0.5 * TP1_R
+    for m in range(hit1 + 1, end + 1):
+        be = (ll[m] <= entry) if d == 1 else (hh[m] >= entry)
+        hit2 = (hh[m] >= tp2) if d == 1 else (ll[m] <= tp2)
+        if be:                      # same-bar BE+TP2 also counts as BE
+            return "win", round(rem, 2)
+        if hit2:
+            return "win", round(rem + 0.5 * TP2_R, 2)
+    tail = 0.5 * max(0.0, d * (c[end] - entry) / risk)
+    return "win", round(rem + tail, 2)
+
+
+def scan_daily_rotations(candles):
+    """Daily liquidity rotation — 'run from one side's liquidity to the
+    other'. Returns dict(trades=[...], watches=[...]).
+
+    watches — every daily-level sweep pierce (informational, web feed only;
+              first-side rotations are a 48% coin flip, so no trade card).
+    trades  — the tradeable flip: the SECOND side swept after the first one
+              already went, with a close back inside the range. One per day.
+    Levels are the prior UTC day's high/low — strictly causal."""
+    if not candles or len(candles) < 200:
+        return dict(trades=[], watches=[])
+    pack = _snr_pack(candles)
+    t, hh, ll, c, atr = (pack[k] for k in ("t", "h", "l", "c", "atr"))
+    n = pack["n"]
+    days, order = {}, []
+    for i in range(n):
+        k = datetime.fromtimestamp(t[i], timezone.utc).strftime("%Y-%m-%d")
+        if k not in days:
+            days[k] = []
+            order.append(k)
+        days[k].append(i)
+    trades, watches = [], []
+    for di in range(1, len(order)):
+        prev, cur = days[order[di - 1]], days[order[di]]
+        pdh = max(hh[i] for i in prev)
+        pdl = min(ll[i] for i in prev)
+        swept = {"high": False, "low": False}
+        first_t = {}
+        done = False
+        for i in cur:
+            # ---- buyside: prior-day HIGH swept -> rotation SHORT
+            if not swept["high"] and hh[i] > pdh + ROT_PIERCE_ATR * atr[i]:
+                swept["high"] = True
+                first_t.setdefault("high", t[i])
+                watches.append(dict(day=order[di], i=int(i), side="high",
+                                    level=round(float(pdh), 1),
+                                    otherDrained=swept["low"], ts=t[i]))
+                if swept["low"] and not done:
+                    j = None
+                    for m in range(i, min(i + ROT_MAX_WAIT + 1, n - 1)):
+                        if c[m] < pdh:
+                            j = m
+                            break
+                    if j is not None:
+                        entry = float(c[j])
+                        sl = float(max(hh[i:j + 1])) + ROT_SL_BUF_ATR * atr[j]
+                        risk = sl - entry
+                        if risk > 0:
+                            tp1 = entry - TP1_R * risk
+                            tp2 = entry - TP2_R * risk
+                            res, r = _rot_resolve(pack, j, -1, entry, sl,
+                                                  tp1, tp2)
+                            if res is not None:
+                                trades.append(dict(
+                                    t=t[j], i=int(j), day=order[di],
+                                    dir="SHORT", entry=round(entry, 1),
+                                    sl=round(sl, 1), tp1=round(tp1, 1),
+                                    tp2=round(tp2, 1), outcome=res,
+                                    r=(round(r, 2) if r is not None else None),
+                                    sweptSide="high",
+                                    sweptLevel=round(float(pdh), 1),
+                                    sweepExt=round(float(max(hh[i:j + 1])), 1),
+                                    firstSide="low",
+                                    firstLevel=round(float(pdl), 1),
+                                    firstT=first_t.get("low"),
+                                    session=session_of(t[j])))
+                        done = True
+            # ---- sellside: prior-day LOW swept -> rotation LONG
+            if not swept["low"] and ll[i] < pdl - ROT_PIERCE_ATR * atr[i]:
+                swept["low"] = True
+                first_t.setdefault("low", t[i])
+                watches.append(dict(day=order[di], i=int(i), side="low",
+                                    level=round(float(pdl), 1),
+                                    otherDrained=swept["high"], ts=t[i]))
+                if swept["high"] and not done:
+                    j = None
+                    for m in range(i, min(i + ROT_MAX_WAIT + 1, n - 1)):
+                        if c[m] > pdl:
+                            j = m
+                            break
+                    if j is not None:
+                        entry = float(c[j])
+                        sl = float(min(ll[i:j + 1])) - ROT_SL_BUF_ATR * atr[j]
+                        risk = entry - sl
+                        if risk > 0:
+                            tp1 = entry + TP1_R * risk
+                            tp2 = entry + TP2_R * risk
+                            res, r = _rot_resolve(pack, j, 1, entry, sl,
+                                                  tp1, tp2)
+                            if res is not None:
+                                trades.append(dict(
+                                    t=t[j], i=int(j), day=order[di],
+                                    dir="LONG", entry=round(entry, 1),
+                                    sl=round(sl, 1), tp1=round(tp1, 1),
+                                    tp2=round(tp2, 1), outcome=res,
+                                    r=(round(r, 2) if r is not None else None),
+                                    sweptSide="low",
+                                    sweptLevel=round(float(pdl), 1),
+                                    sweepExt=round(float(min(ll[i:j + 1])), 1),
+                                    firstSide="high",
+                                    firstLevel=round(float(pdh), 1),
+                                    firstT=first_t.get("high"),
+                                    session=session_of(t[j])))
+                        done = True
+    return dict(trades=trades, watches=watches)
+
+
+def rotation_view(e):
+    """Live rotation trade -> display/alert dict (schema like sweep_view())."""
+    if not e:
+        return None
+    grade = "B+" if e.get("session") == "dead" else "A+"
+    ft = e.get("firstT")
+    ft_s = (datetime.fromtimestamp(ft, timezone.utc).strftime("%H:%M")
+            + " UTC") if ft else "earlier today"
+    hi_first = e["firstSide"] == "high"
+    return dict(kind="rotation", grade=grade, direction=e["dir"],
+                entry=e["entry"], sl=e["sl"], tp1=e["tp1"], tp2=e["tp2"],
+                rr1=TP1_R, rr2=TP2_R, sweptSide=e["sweptSide"],
+                sweptLevel=e["sweptLevel"], sweepExt=e["sweepExt"],
+                firstSide=e["firstSide"], firstLevel=e["firstLevel"],
+                firstT=ft_s, session=e.get("session"), barTime=e["t"],
+                day=e["day"],
+                note=("Both daily liquidity pools drained — prior-day " +
+                      ("HIGH" if hi_first else "LOW") + " went first (" +
+                      ft_s + "), then the prior-day " +
+                      ("LOW" if hi_first else "HIGH") + " was swept to " +
+                      format(e["sweepExt"], ",.1f") +
+                      " and price closed back inside the range. No fuel "
+                      "left on either side — rotate back toward the spent " +
+                      ("high" if hi_first else "low") + ". "
+                      "Entry at the reclaim close, SL beyond the sweep wick."))
+
+
+def watch_view(w):
+    """Live daily-liquidity sweep pierce -> web-feed dict (informational)."""
+    if not w:
+        return None
+    side = "HIGH" if w["side"] == "high" else "LOW"
+    return dict(kind="liqwatch", side=w["side"], level=w["level"],
+                day=w["day"], barTime=w["ts"],
+                otherDrained=bool(w["otherDrained"]),
+                note=("prior-day " + side + " swept — rotation watch toward "
+                      "the other side"))
+
+
 def htf_zone(candles_htf, side, price):
     """Nearest same-side higher-timeframe zone containing price (HTF ladder)."""
     if not candles_htf or len(candles_htf) < 200:

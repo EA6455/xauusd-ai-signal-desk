@@ -446,6 +446,7 @@
         <div class="card-head"><h2>SNR Entry · 15m</h2><span class="grade wait" id="entryStatus">…</span></div>
         <div id="entryBody"><div class="muted small">loading tactical engine…</div></div>
         <div id="sweepBody"></div>
+        <div id="rotBody"></div>
         <div id="radarBody"></div>
       </div>
 
@@ -841,6 +842,49 @@ const INITIAL = {{ payload|tojson }};
         '">' + g + '+</b> ' + v.setups + ' · ' + Math.round((v.winRate || 0) * 100) +
         '% · ' + (v.avgR >= 0 ? '+' : '') + (v.avgR || 0).toFixed(2) + 'R';
     }).filter(Boolean).join(' · ') + ' · reclaim watch</div></div>';
+    body.innerHTML = h;
+  }
+
+  // ---------- daily liquidity rotation ----------
+  function renderRotation(){
+    const body = $('rotBody');
+    const d = state.data || {};
+    const r = d.rotation;
+    let h = '';
+    if(r){
+      const swLbl = r.sweptSide === 'high' ? 'Swept PD high →' : 'Swept PD low →';
+      const fwLbl = 'First-drained PD ' + (r.firstSide === 'low' ? 'low' : 'high');
+      h += '<div class="radar"><div class="radar-h">🔁 daily liquidity rotation · ' +
+           r.grade + ' flip</div>';
+      h += '<div class="lvls">'
+        + lvl(swLbl, r.sweepExt.toFixed(1), 'var(--gold)')
+        + lvl(fwLbl, r.firstLevel.toFixed(1), '')
+        + lvl('Entry (reclaim)', r.entry.toFixed(1), 'var(--green)')
+        + lvl('Stop loss', r.sl.toFixed(1), 'var(--red)')
+        + lvl('TP1 · ' + r.rr1 + 'R', r.tp1.toFixed(1), 'var(--green)')
+        + lvl('TP2 · ' + r.rr2 + 'R', r.tp2.toFixed(1), 'var(--green)')
+        + '</div>';
+      h += '<div class="small" style="margin:2px 0 6px; color:var(--muted)">' +
+           r.note + '</div>';
+      const st = d.rotationStats || {};
+      if(st.setups){
+        h += '<div class="small muted">Flips (60d): ' + st.setups + ' · ' +
+             Math.round((st.winRate || 0) * 100) + '% · ' +
+             (st.avgR >= 0 ? '+' : '') + (st.avgR || 0).toFixed(2) +
+             'R avg · small sample</div>';
+      }
+      h += '</div>';
+    } else if(d.liqWatch){
+      const w = d.liqWatch;
+      const side = w.side === 'high' ? 'HIGH' : 'LOW';
+      h += '<div class="radar"><div class="radar-h">🔁 daily liquidity watch</div>' +
+           '<div class="small" style="color:var(--muted)">prior-day ' + side +
+           ' @ ' + w.level.toFixed(1) + ' swept — rotation watch toward the other side' +
+           (w.otherDrained
+             ? ' · <b style="color:var(--gold)">other side already drained — flip armed, waiting for reclaim</b>'
+             : ' · first-side sweeps alone are a 48% coin flip') +
+           '</div></div>';
+    }
     body.innerHTML = h;
   }
 
@@ -1248,7 +1292,7 @@ const INITIAL = {{ payload|tojson }};
         '-bar hit rate: ' + (hr.wins / hr.total * 100).toFixed(0) + '% (' + hr.wins + '/' + hr.total + ')'
       : 'No historical signal flips in the loaded window.';
 
-    renderNote(); renderDesk(); renderTracker(); renderAlerts(); renderPa(); renderFundamentals(); renderRadar(); renderSweep();
+    renderNote(); renderDesk(); renderTracker(); renderAlerts(); renderPa(); renderFundamentals(); renderRadar(); renderSweep(); renderRotation();
     if(d.entry){ renderEntry(); }
     drawChart(P0());
   }

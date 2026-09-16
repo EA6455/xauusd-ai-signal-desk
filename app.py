@@ -434,6 +434,102 @@ def maybe_sweep_alert(sw):
                  sw["tp1"], sw["tp2"])
 
 
+_liq_watch_mem = {"keys": []}
+
+
+def maybe_liq_watch(w):
+    """🔁 Web-feed watch: a prior-day liquidity level just got swept — the
+    'run from one side to the other' story may be starting. Informational
+    only (first-side rotations are a 48% coin flip): no TG card, no trade."""
+    if not w:
+        return
+    key = f"liq:{w.get('day')}:{w.get('side')}"
+    if key in _liq_watch_mem["keys"]:
+        return
+    _liq_watch_mem["keys"] = (_liq_watch_mem["keys"] + [key])[-40:]
+    side = "HIGH" if w.get("side") == "high" else "LOW"
+    if w.get("otherDrained"):
+        _web_alert("LIQ", f"🔁 DAILY LIQ — prior-day {side} swept @ "
+                          f"{w['level']:,.1f} · other side already drained — "
+                          f"FLIP ARMED, waiting for the reclaim close")
+    else:
+        _web_alert("LIQ", f"🔁 DAILY LIQ — prior-day {side} swept @ "
+                          f"{w['level']:,.1f} · rotation watch toward the "
+                          f"other side (first-side sweeps alone are a 48% "
+                          f"coin flip — the tradeable flip needs BOTH sides "
+                          f"drained)")
+
+
+_rot_alerted = {"keys": []}
+
+
+def maybe_rotation_alert(rt, stats=None):
+    """🔁 LIQUIDITY ROTATION trade card: both daily pools drained and the
+    second sweep reclaimed — trade the rotation back toward the spent side.
+    One alert per day; honest small-sample stats on the card."""
+    PHONE = True
+    if not rt:
+        return
+    if _event_blackout():
+        return
+    key = f"rot:{rt.get('day')}:{rt.get('direction')}"
+    if key in _rot_alerted["keys"]:
+        return
+    _rot_alerted["keys"] = (_rot_alerted["keys"] + [key])[-40:]
+    icon = "🟢" if rt["direction"] == "LONG" else "🔴"
+    _web_alert("ROT", f"🔁 {rt['grade']} LIQUIDITY ROTATION "
+                      f"{rt['direction']} flip @ {rt['entry']:,.2f} · both "
+                      f"pools drained · SL {rt['sl']:,.2f} · "
+                      f"TP1 {rt['tp1']:,.2f}")
+    if not PHONE:
+        return
+    if time.time() - STATE.get("lastSetupT", 0) < SETUP_COOLDOWN_S:
+        return
+    with STATE_LOCK:
+        STATE["lastSetupT"] = time.time()
+    st = stats or {}
+    hist = ""
+    if st.get("setups"):
+        hist = (f"📊 Backtest: {round((st.get('winRate') or 0) * 100):.0f}% win"
+                f" · {st.get('avgR', 0):+.2f}R avg · n={st['setups']}"
+                f" (small sample)\n")
+    rot_dir = "DOWN" if rt["direction"] == "SHORT" else "UP"
+    if rt["firstSide"] == "low":
+        f1 = (f"✅ SELLSIDE drained first — prior-day LOW "
+              f"{rt['firstLevel']:,.1f} swept {rt.get('firstT', 'earlier today')}")
+        f2 = (f"✅ BUYSIDE just swept — prior-day HIGH "
+              f"{rt['sweptLevel']:,.1f} → wick {rt['sweepExt']:,.1f}")
+        spent = "sellside"
+    else:
+        f1 = (f"✅ BUYSIDE drained first — prior-day HIGH "
+              f"{rt['firstLevel']:,.1f} swept {rt.get('firstT', 'earlier today')}")
+        f2 = (f"✅ SELLSIDE just swept — prior-day LOW "
+              f"{rt['sweptLevel']:,.1f} → wick {rt['sweepExt']:,.1f}")
+        spent = "buyside"
+    warn = "" if rt["grade"] == "A+" else \
+        f"\n⚠ dead-session entry — smaller size or skip"
+    _notify(f"{icon} {rt['grade']} LIQUIDITY ROTATION {rt['direction']} SIGNAL\n\n"
+            f"📊 Timeframe: 15M\n"
+            f"💰 Symbol: XAUUSD\n"
+            f"📍 Setup: Daily liquidity rotation · both pools drained\n\n"
+            f"🧭 Liquidity story (side → side):\n"
+            f"{f1}\n"
+            f"{f2}\n"
+            f"✅ Reclaim — 15m close back inside the daily range\n"
+            f"🔁 Rotation: back {rot_dir} toward the spent {spent}\n\n"
+            f"🎯 Entry: {rt['entry']:,.2f} (at reclaim close)\n"
+            f"🛑 SL: {rt['sl']:,.2f} (beyond the sweep wick)\n"
+            f"🎯 TP1: {rt['tp1']:,.2f} (half off · 1:0.75 RR)\n"
+            f"🎯 TP2: {rt['tp2']:,.2f} (runner · 1:1.5 RR)\n\n"
+            f"👉 Trade now on your own broker\n\n"
+            f"{hist}"
+            f"⚠ First-side sweeps alone are a 48% coin flip — only the "
+            f"both-drained flip is traded\n"
+            f"⭐ SNR Rating: {rt['grade']} ROTATION{warn}")
+    track_signal("ROTATION", key, rt["direction"], rt["entry"], rt["sl"],
+                 rt["tp1"], rt["tp2"])
+
+
 # ------------------------------------------------------------------ alerts
 _zw_mem = {"t": 0.0, "keys": []}
 
@@ -1317,6 +1413,28 @@ def build_payload(tf, d, symbol="XAUUSD"):
             except Exception:  # noqa: BLE001
                 payload["sweep"] = None
                 payload["sweepStats"] = None
+            # daily liquidity rotation: tradeable both-pools-drained flip +
+            # informational watch lines for every daily-level sweep
+            try:
+                rot = entries.scan_daily_rotations(candles)
+                n15 = len(candles)
+                livert = [e for e in rot["trades"] if e["i"] >= n15 - 5]
+                payload["rotation"] = (entries.rotation_view(livert[-1])
+                                       if livert else None)
+                tr = [e for e in rot["trades"] if e["i"] <= n15 - 4]
+                wt = sum(1 for e in tr if e["outcome"] == "win")
+                payload["rotationStats"] = dict(
+                    setups=len(tr),
+                    winRate=round(wt / len(tr), 3) if tr else None,
+                    avgR=round(sum(e["r"] or 0.0 for e in tr) / len(tr), 3)
+                    if tr else None)
+                wa = [x for x in rot["watches"] if x["i"] >= n15 - 5]
+                payload["liqWatch"] = (entries.watch_view(wa[-1])
+                                       if wa else None)
+            except Exception:  # noqa: BLE001
+                payload["rotation"] = None
+                payload["rotationStats"] = None
+                payload["liqWatch"] = None
             blk = _event_blackout()
             if blk:
                 _postpone_note(ent, blk)
@@ -1327,6 +1445,11 @@ def build_payload(tf, d, symbol="XAUUSD"):
                 maybe_zone_watch(ent)
                 if payload.get("sweep"):
                     maybe_sweep_alert(payload["sweep"])
+                if payload.get("liqWatch"):
+                    maybe_liq_watch(payload["liqWatch"])
+                if payload.get("rotation"):
+                    maybe_rotation_alert(payload["rotation"],
+                                         payload.get("rotationStats"))
         except Exception:  # noqa: BLE001
             import traceback
             traceback.print_exc()

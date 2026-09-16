@@ -7,6 +7,7 @@ Run:  python app.py   →  http://localhost:7860
 """
 from __future__ import annotations
 
+import calendar
 import hashlib
 import itertools
 import json
@@ -76,7 +77,7 @@ STATE_LOCK = threading.Lock()
 STATE = dict(alerts=[], priceAlerts=[], lastSig={}, lastPrice=None,
              liveTrade=None, tradeHistory=[], lastSigT={}, lastSetup=None,
              lastSetupT=0.0, eventAlerted=[], newsSeen=None, brokerOffset=0.0,
-             llmBriefDay="")
+             llmBriefDay="", asiaBO=None)
 try:
     with open(STATE_PATH) as f:
         _loaded = json.load(f)
@@ -249,6 +250,178 @@ def maybe_alert(tf, sig_type, price, score, conf, atr=None):
 SETUP_COOLDOWN_S = 2 * 3600         # min gap between ENTRY alerts
 
 
+def _event_blackout():
+    """High-impact event window: 30 min before start -> 15 min after.
+    Returns the event title while inside the window, else None."""
+    try:
+        for e in fundamentals.upcoming(hours=0.5, impacts=("High",)):
+            if e.get("minutesTo", 999) <= 30:
+                return e.get("title") or "high-impact event"
+    except Exception:  # noqa: BLE001
+        pass
+    now = time.time()
+    for key in (STATE.get("eventAlerted") or [])[-10:]:
+        try:
+            ts = int(str(key).split(":", 1)[0])
+        except ValueError:
+            continue
+        if 0 <= now - ts <= 15 * 60:
+            return str(key).split(":", 1)[-1]
+    return None
+
+
+_postpone_mem = {}
+
+
+def _postpone_note(ent, title):
+    """Web-feed note: a live setup exists but alerting is postponed."""
+    if not ent or not ent.get("touching"):
+        return
+    key = (ent.get("zoneKey") or "") + ":" + str(ent.get("grade"))
+    now = time.time()
+    if _postpone_mem.get(key) and now - _postpone_mem[key] < 3600:
+        return
+    _postpone_mem[key] = now
+    _web_alert("WAIT", f"⏸ {ent.get('grade', 'setup')} {ent['direction']} signal "
+                       f"postponed — {title} event window")
+
+
+_sweep_alerted = {"keys": []}
+
+
+def maybe_sweep_alert(sw):
+    """Liquidity-sweep watch: web feed only (recent 60d stats below the phone
+    bar — flip PHONE=True to also send cards). One alert per sweep event."""
+    PHONE = False
+    if not sw or sw.get("grade") not in ("A+", "B+"):
+        return
+    if _event_blackout():
+        return
+    key = f"sweep:{sw.get('anchor')}:{sw.get('barTime')}"
+    if key in _sweep_alerted["keys"]:
+        return
+    _sweep_alerted["keys"] = (_sweep_alerted["keys"] + [key])[-40:]
+    _web_alert("SWEEP", f"🧹 {sw['grade']} SWEEP {sw['direction']} reclaim @ "
+                        f"{sw['entry']:,.2f} · swept {sw['zone'][0]:,.1f}–"
+                        f"{sw['zone'][1]:,.1f} · SL {sw['sl']:,.2f} · "
+                        f"TP1 {sw['tp1']:,.2f} · {sw['passed']}/4")
+    if not PHONE:
+        return
+    if time.time() - STATE.get("lastSetupT", 0) < SETUP_COOLDOWN_S:
+        return
+    with STATE_LOCK:
+        STATE["lastSetupT"] = time.time()
+    side_lbl = "Support" if sw["zoneSide"] == "demand" else "Resistance"
+    icon = "🟢" if sw["direction"] == "LONG" else "🔴"
+    warn = "" if sw["grade"] == "A+" else \
+        f"\n⚠ {sw['passed']}/4 confluence — reduced quality: smaller size or skip"
+    _notify(f"{icon} {sw['grade']} SWEEP {sw['direction']} SIGNAL\n\n"
+            f"📊 Timeframe: 15M\n"
+            f"💰 Symbol: XAUUSD\n"
+            f"📍 Setup: Liquidity Sweep · {side_lbl}\n\n"
+            f"🎯 Entry: {sw['entry']:,.2f}\n"
+            f"🛑 SL: {sw['sl']:,.2f}\n"
+            f"🎯 TP: {sw['tp1']:,.2f}\n\n"
+            f"⭐ SNR Rating: {sw['grade']} SWEEP{warn}")
+
+
+def _asia_bo_watch():
+    """London breakout of the Asian range: breakout close -> retest ->
+    confirmation -> one card per day. Web feed + phone (event-gated)."""
+    now = time.time()
+    if entries.session_of(now) != "london":
+        return
+    today = time.strftime("%Y-%m-%d", time.gmtime())
+    st = STATE.get("asiaBO") or {}
+    if st.get("date") != today:
+        st = dict(date=today, stage="wait", dir=None, level=None,
+                  hi=None, lo=None, bi=None)
+        STATE["asiaBO"] = st
+        _save_state()
+    if st.get("stage") == "done":
+        return
+    try:
+        c15 = data.get_candles("15m").get("candles") or []
+    except Exception:  # noqa: BLE001
+        return
+    if len(c15) < 260:
+        return
+    day0 = calendar.timegm(time.strptime(today, "%Y-%m-%d"))
+    a0, a1 = day0 + 3600, day0 + 7 * 3600
+    asia = [k for k in c15 if a0 <= k["t"] < a1]
+    if len(asia) < 8:
+        return
+    hi, lo = max(k["h"] for k in asia), min(k["l"] for k in asia)
+    h = [k["h"] for k in c15[-40:]]
+    l = [k["l"] for k in c15[-40:]]
+    cc = [k["c"] for k in c15[-40:]]
+    atr = ml.atr(h, l, cc, 14)[-1] or 1.0
+    if not (0.4 * atr <= hi - lo <= 10 * atr):
+        STATE["asiaBO"] = dict(st, stage="done")
+        _save_state()
+        return
+    london = [k for k in c15 if k["t"] >= a1]
+    if not london:
+        return
+    if st["stage"] == "wait":
+        for k in london[:-1]:                    # closed bars only
+            if k["c"] > hi or k["c"] < lo:
+                br = "LONG" if k["c"] > hi else "SHORT"
+                STATE["asiaBO"] = dict(st, stage="broken", dir=br,
+                                       level=round(hi if br == "LONG" else lo, 1),
+                                       hi=hi, lo=lo, bi=k["t"])
+                _save_state()
+                break
+    st = STATE["asiaBO"]
+    if st["stage"] != "broken":
+        return
+    level, dr = st["level"], st["dir"]
+    tol = 0.25 * atr
+    for k in london[:-1]:
+        if k["t"] <= (st.get("bi") or 0):
+            continue
+        if dr == "LONG":
+            if k["c"] < level - 1.5 * atr:       # failed breakout
+                STATE["asiaBO"] = dict(st, stage="wait", dir=None, level=None, bi=None)
+                _save_state()
+                return
+            if k["l"] <= level + tol and k["c"] > k["o"] and k["c"] > level:
+                entry = k["c"]
+                break
+        else:
+            if k["c"] > level + 1.5 * atr:
+                STATE["asiaBO"] = dict(st, stage="wait", dir=None, level=None, bi=None)
+                _save_state()
+                return
+            if k["h"] >= level - tol and k["c"] < k["o"] and k["c"] < level:
+                entry = k["c"]
+                break
+        if k["t"] - (st.get("bi") or 0) > 12 * 900:   # no retest in 12 bars
+            STATE["asiaBO"] = dict(st, stage="done")
+            _save_state()
+            return
+    else:
+        return
+    STATE["asiaBO"] = dict(st, stage="done")
+    _save_state()
+    d = 1 if dr == "LONG" else -1
+    sl = entry - d * 1.0 * atr
+    tp = entry + d * 2.0 * atr
+    _web_alert("ENTRY", f"London breakout {dr} · Asia range {lo:.1f}–{hi:.1f} · "
+                        f"retest {level:.1f}")
+    if not _event_blackout():
+        icon = "🟢" if dr == "LONG" else "🔴"
+        _notify(f"{icon} LONDON BREAKOUT {dr} SIGNAL\n\n"
+                f"📊 Timeframe: 15M\n"
+                f"💰 Symbol: XAUUSD\n"
+                f"📍 Setup: Asia Range Breakout\n\n"
+                f"🎯 Entry: {entry:,.2f}\n"
+                f"🛑 SL: {sl:,.2f}\n"
+                f"🎯 TP: {tp:,.2f}\n\n"
+                f"📐 Asia range: {lo:,.1f} – {hi:,.1f}\n"
+                f"⭐ SNR Rating: BREAKOUT")
+
+
 def maybe_setup_alert(ent):
     """Fire an alert on SNR retests, once per ZONE+GRADE (a setup that stays
     live for hours must not re-alert every 15 minutes). A+ and B+ also go to
@@ -288,11 +461,17 @@ def maybe_setup_alert(ent):
     icon = "🟢" if ent["direction"] == "LONG" else "🔴"
     warn = "" if grade == "A+" else \
         f"\n⚠ {ent['passed']}/8 confluence — reduced quality: smaller size or skip"
+    htf_line = ""
+    if ent.get("htf"):
+        h = ent["htf"]
+        htf_line = (f"\n📐 HTF: {h['tf']} "
+                    f"{'demand' if side == 'demand' else 'supply'} "
+                    f"{h['bottom']:,.0f}–{h['top']:,.0f}")
     _notify(
         f"{icon} {grade} {ent['direction']} SIGNAL\n\n"
         f"📊 Timeframe: 15M\n"
         f"💰 Symbol: XAUUSD\n"
-        f"📍 Setup: {setup_lbl}\n\n"
+        f"📍 Setup: {setup_lbl}{htf_line}\n\n"
         f"🎯 Entry: {ent['entry']:,.2f}\n"
         f"🛑 SL: {ent['sl']:,.2f}\n"
         f"🎯 TP: {ent['tp1']:,.2f}\n\n"
@@ -839,8 +1018,46 @@ def build_payload(tf, d):
             payload["sessionStats"] = entries.session_stats(setups)
             payload["radar"] = entries.zone_radar(
                 candles, d1h.get("candles"), price=payload["price"])
-            ensure_trade(ent)
-            maybe_setup_alert(ent)
+            # 4H confluence ladder: 15m setup inside a 4H zone = HTF grade
+            try:
+                d4h = data.get_candles("4h")
+                if ent and ent.get("zoneSide"):
+                    hz = entries.htf_zone(d4h.get("candles") or [],
+                                          ent["zoneSide"], float(payload["price"]))
+                    if hz:
+                        ent["htf"] = dict(tf="4H",
+                                          top=round(float(hz["top"]), 1),
+                                          bottom=round(float(hz["bottom"]), 1))
+            except Exception:  # noqa: BLE001
+                pass
+            # liquidity sweeps: live event + honest per-grade stats
+            try:
+                events = entries.scan_sweeps(candles)
+                n15 = len(candles)
+                live = [s for s in events if s["i"] >= n15 - 5]
+                payload["sweep"] = entries.sweep_view(live[-1]) if live else None
+
+                def _sst(ss):
+                    w = sum(1 for s in ss if s["outcome"] == "win")
+                    r = sum(s["r"] or 0.0 for s in ss)
+                    return dict(setups=len(ss),
+                                winRate=round(w / len(ss), 3) if ss else None,
+                                avgR=round(r / len(ss), 3) if ss else None)
+                payload["sweepStats"] = dict(A=_sst([s for s in events
+                                                     if s["grade"] == "A+"]),
+                                             B=_sst([s for s in events
+                                                     if s["grade"] == "B+"]))
+            except Exception:  # noqa: BLE001
+                payload["sweep"] = None
+                payload["sweepStats"] = None
+            blk = _event_blackout()
+            if blk:
+                _postpone_note(ent, blk)
+            else:
+                ensure_trade(ent)
+                maybe_setup_alert(ent)
+                if payload.get("sweep"):
+                    maybe_sweep_alert(payload["sweep"])
         except Exception:  # noqa: BLE001
             import traceback
             traceback.print_exc()
@@ -1044,6 +1261,10 @@ def _background_loop():
             pass
         try:
             fundamental_watch()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            _asia_bo_watch()
         except Exception:  # noqa: BLE001
             pass
         try:

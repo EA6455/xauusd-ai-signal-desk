@@ -438,6 +438,119 @@ def evaluate(candles15, candles_1h=None):
 
 
 # ------------------------------------------------------------------ backtest
+# ---------------------------------------------------- liquidity sweeps
+SWEEP_MAX_WAIT = 3       # bars allowed beyond the zone before it's a breakdown
+SWEEP_DEPTH_ATR = 0.15   # wick must pierce the zone by this much (ATR fraction)
+SWEEP_CHECKS = ["Market structure", "1H trend aligned", "Session live",
+                "Reclaim candle"]
+
+
+def scan_sweeps(candles):
+    """All historical liquidity-sweep reclaim events.
+
+    A sweep = wick pierces a zone (grabbing stops beyond it) and price CLOSES
+    back on the right side within a few bars. Deliberately includes zones the
+    main engine already counts as 'tested' — a sweep is what makes a retest
+    interesting. One event per sweep; the zone stays scannable after a reclaim.
+    """
+    if not candles or len(candles) < 200:
+        return []
+    pack = _snr_pack(candles)
+    n, o, c = pack["n"], pack["o"], pack["c"]
+    hh, ll, atr = pack["h"], pack["l"], pack["atr"]
+    out = []
+    for z in pack["zones"]:
+        if z["usable_from"] >= n - 2:
+            continue
+        d = 1 if z["side"] == "demand" else -1
+        k = z["usable_from"]
+        end = n - 2
+        while k <= end:
+            pierced = ((ll[k] < z["bottom"] - SWEEP_DEPTH_ATR * atr[k]) if d == 1
+                       else (hh[k] > z["top"] + SWEEP_DEPTH_ATR * atr[k]))
+            if not pierced:
+                k += 1
+                continue
+            # reclaim: close back on the right side within SWEEP_MAX_WAIT bars
+            j = None
+            for m in range(k, min(n - 1, k + SWEEP_MAX_WAIT + 1)):
+                back = c[m] >= z["bottom"] if d == 1 else c[m] <= z["top"]
+                if back:
+                    j = m
+                    break
+            if j is None:
+                break                    # real breakdown — zone invalid for sweeps
+            deep = ((c[k] < z["bottom"] - SL_BUF_ATR * atr[k]) if d == 1
+                    else (c[k] > z["top"] + SL_BUF_ATR * atr[k]))
+            if deep:
+                k = j + 1                   # closed deep beyond = breakdown,
+                continue                     # not a sweep — skip this event
+            conf = _confirm(o, c, hh, ll, j, d)
+            checks = [bool(pack["struct"][k] == d), bool(pack["htf"][k] == d),
+                      session_of(pack["t"][j]) != "dead", bool(conf)]
+            passed = sum(checks)
+            miss = [SWEEP_CHECKS[i] for i, okc in enumerate(checks) if not okc]
+            if passed >= 3:
+                entry = float(c[j])
+                sl = ((float(min(ll[k:j + 1])) - 0.1 * atr[j]) if d == 1
+                      else (float(max(hh[k:j + 1])) + 0.1 * atr[j]))
+                risk = abs(entry - sl)
+                if risk > 0:
+                    tp1 = entry + d * TP1_R * risk
+                    res, r = _resolve_snr(entry, sl, tp1, pack, j, d)
+                    if res is not None:
+                        out.append(dict(
+                            t=pack["t"][j], i=int(j),
+                            dir="LONG" if d == 1 else "SHORT",
+                            entry=round(entry, 1), sl=round(sl, 1),
+                            tp1=round(tp1, 1), outcome=res,
+                            r=(round(r, 2) if r is not None else None),
+                            grade=("A+" if passed == 4 else "B+"),
+                            passed=int(passed), miss=miss, side=z["side"],
+                            zone=[round(float(z["bottom"]), 1),
+                                  round(float(z["top"]), 1)],
+                            anchor=z["anchor"]))
+            k = j + 1
+    out.sort(key=lambda s: s["t"])
+    return out
+
+
+def sweep_view(e):
+    """Live sweep event -> display/alert dict (schema like evaluate())."""
+    if not e:
+        return None
+    d = 1 if e["dir"] == "LONG" else -1
+    risk = abs(e["entry"] - e["sl"])
+    return dict(kind="sweep", grade=e["grade"], direction=e["dir"],
+                entry=e["entry"], sl=e["sl"], tp1=e["tp1"],
+                tp2=round(e["entry"] + d * TP2_R * risk, 1),
+                rr1=TP1_R, rr2=TP2_R, zone=e["zone"], zoneSide=e["side"],
+                passed=e["passed"], checksTotal=4, barTime=e["t"],
+                miss=e.get("miss") or [],
+                anchor=e["anchor"],
+                note=("Wick swept the " + e["side"] + " zone and price closed "
+                      "back inside it — stops taken, reclaim in force"))
+
+
+def htf_zone(candles_htf, side, price):
+    """Nearest same-side higher-timeframe zone containing price (HTF ladder)."""
+    if not candles_htf or len(candles_htf) < 200:
+        return None
+    try:
+        pack = _snr_pack(candles_htf)
+    except Exception:  # noqa: BLE001
+        return None
+    best = None
+    for z in pack["zones"]:
+        if z["side"] != side or z["usable_from"] > pack["n"] - 2:
+            continue
+        if z["bottom"] <= price <= z["top"]:
+            dist = abs((z["top"] + z["bottom"]) / 2.0 - price)
+            if best is None or dist < best[0]:
+                best = (dist, z)
+    return best[1] if best else None
+
+
 RADAR_MISS = {"struct": "market structure", "bos": "break of structure",
               "origin": "zone origin BOS", "fresh": "fresh (untested)",
               "htf": "1H trend"}

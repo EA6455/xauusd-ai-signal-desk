@@ -338,6 +338,7 @@
       <div class="card" id="entryCard">
         <div class="card-head"><h2>SNR Entry · 15m</h2><span class="grade wait" id="entryStatus">…</span></div>
         <div id="entryBody"><div class="muted small">loading tactical engine…</div></div>
+        <div id="sweepBody"></div>
         <div id="radarBody"></div>
       </div>
 
@@ -370,6 +371,11 @@
     logistic-regression model (45%) with a classic rule ensemble (55%):
     EMA 9/21 trend, SMA-20, MACD, RSI and Bollinger bands.</p>
     <ul style="margin-top:6px">
+      <li><b>Strategy concepts</b> — beyond the core SNR retest: 🧹 <b>liquidity sweeps</b>
+      (wick through a zone + reclaim — stops taken), 📐 <b>HTF ladder</b> (15m setup inside a
+      4H zone upgrades the card), ⏸ <b>event black-out</b> (no new signal alerts 30 min
+      before → 15 min after high-impact USD events), and 🌏 <b>Asia range breakout</b>
+      (London break + retest of the Asian session range).</li>
       <li><b>AI Analyst Desk</b> — eight independent models read the same chart (neural ML,
       momentum, market structure, SNR zones, mean reversion, volatility &amp; range, live
       order flow, macro) and vote; the consensus meter aggregates them, confidence-weighted.
@@ -607,6 +613,36 @@ const INITIAL = {{ payload|tojson }};
       .toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit'});
   }
 
+  // ---------- liquidity sweep watch ----------
+  function renderSweep(){
+    const body = $('sweepBody');
+    const s = state.data && state.data.sweep;
+    if(!s){ body.innerHTML = ''; return; }
+    const live = s.grade === 'A+' || s.grade === 'B+';
+    if(!live){ body.innerHTML = ''; return; }
+    let h = '<div class="radar"><div class="radar-h">🧹 liquidity sweep · ' +
+      s.grade + ' watch</div>';
+    h += '<div class="lvls">'
+      + lvl((s.zoneSide === 'supply' ? 'Swept supply' : 'Swept demand'),
+            s.zone[0].toFixed(1) + ' – ' + s.zone[1].toFixed(1), 'var(--gold)')
+      + lvl('Entry (reclaim)', s.entry.toFixed(1), 'var(--green)')
+      + lvl('Stop loss', s.sl.toFixed(1), 'var(--red)')
+      + lvl('TP1 · 1:' + s.rr1.toFixed(1) + ' RR', s.tp1.toFixed(1), 'var(--green)')
+      + '</div>';
+    h += '<div class="small" style="margin:2px 0 6px; color:var(--muted)">' +
+      s.note + ' · ' + s.passed + '/4 confluence' +
+      (s.miss && s.miss.length ? ' · missing: ' + s.miss.join(', ') : '') + '</div>';
+    const ss = state.data.sweepStats || {};
+    h += '<div class="small muted">Sweeps (60d): ' + ['A','B'].map(function(g){
+      var v = ss[g] || {};
+      if(!v.setups) return null;
+      return '<b style="color:' + (g === 'A' ? 'var(--green)' : 'var(--amber)') +
+        '">' + g + '+</b> ' + v.setups + ' · ' + Math.round((v.winRate || 0) * 100) +
+        '% · ' + (v.avgR >= 0 ? '+' : '') + (v.avgR || 0).toFixed(2) + 'R';
+    }).filter(Boolean).join(' · ') + ' · web watch only</div></div>';
+    body.innerHTML = h;
+  }
+
   // ---------- zone radar ----------
   function renderRadar(){
     const body = $('radarBody');
@@ -646,7 +682,7 @@ const INITIAL = {{ payload|tojson }};
     const long = e.direction === 'LONG';
     $('entryCard').className = 'card' + (e.active ? (long ? ' glow-long' : ' glow-short') : '');
     if(e.active){
-      st.textContent = e.grade + ' ' + e.direction + ' RETEST';
+      st.textContent = e.grade + (e.htf ? ' HTF' : '') + ' ' + e.direction + ' RETEST';
       st.className = 'grade ' + (long ? 'long' : 'short');
     } else if(e.grade === 'B+' || e.grade === 'C+'){
       st.textContent = e.grade + ' ' + e.direction + ' SETUP';
@@ -667,6 +703,9 @@ const INITIAL = {{ payload|tojson }};
         + lvl('TP2 · 1:' + e.rr2.toFixed(1) + ' RR', e.tp2.toFixed(1), 'var(--green)')
         + lvl('Risk (ATR)', e.atr.toFixed(2))
         + lvl('Structure', e.trend1h)
+        + (e.htf ? lvl('HTF confluence', e.htf.tf + ' ' +
+            (e.zoneSide === 'demand' ? 'demand' : 'supply') + ' ' +
+            e.htf.bottom.toFixed(0) + '–' + e.htf.top.toFixed(0), 'var(--purple)') : '')
         + '</div>';
       if(e.grade === 'B+')
         h += '<div class="small" style="margin:2px 0 10px; color:var(--amber)">⚠ B+ · '
@@ -949,7 +988,7 @@ const INITIAL = {{ payload|tojson }};
         '-bar hit rate: ' + (hr.wins / hr.total * 100).toFixed(0) + '% (' + hr.wins + '/' + hr.total + ')'
       : 'No historical signal flips in the loaded window.';
 
-    renderNote(); renderDesk(); renderTracker(); renderAlerts(); renderPa(); renderFundamentals(); renderRadar();
+    renderNote(); renderDesk(); renderTracker(); renderAlerts(); renderPa(); renderFundamentals(); renderRadar(); renderSweep();
     if(d.entry){ renderEntry(); }
     drawChart();
   }

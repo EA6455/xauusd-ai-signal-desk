@@ -496,11 +496,11 @@
       <b style="color:#7c8aa0">C+</b> (6/8, phone with warning) — plus ⏳ setup-forming
       heads-ups when price taps a fresh zone. Malaysian-style Supply &amp; Demand: market structure
       (HH·HL / LH·LL), break of structure, the origin zone that caused it, first retest with
-      engulfing/pin confirmation, 1H trend agreement, SL beyond the zone, TP at 1:2 RR —
+      engulfing/pin confirmation, 1H trend agreement, SL beyond the zone, TP1 at 1:0.75 RR —
       and never during dead hours.</li>
       <li><b>Signal Tracker</b> — <b>every signal card</b> (A+/B+/C+ retest and ⚡ momentum)
-      is tracked live to its final TP or SL: half banked at TP1 (+1.0R),
-      stop to breakeven, runner to TP2 (+2.5R). You get alerts at every step, and the
+      is tracked live to its final TP or SL: half banked at TP1 (+0.38R),
+      stop to breakeven, runner to TP2 (+1.13R). You get alerts at every step, and the
       outcome history builds up on the card.</li>
     </ul>
     <p style="margin-top:6px"><b>Fundamentals</b> — economic calendar (CPI, FOMC, NFP...),
@@ -919,7 +919,7 @@ const INITIAL = {{ payload|tojson }};
     const s = state.entryStats;
     if(s && s.setups){
       h += '<div class="small muted" style="margin-top:10px; line-height:1.65">Backtest (last 60d): '
-        + '<b style="color:var(--text)">' + (s.winRate * 100).toFixed(0) + '%</b> hit TP1 (1:2 RR) over '
+        + '<b style="color:var(--text)">' + (s.winRate * 100).toFixed(0) + '%</b> hit TP1 (high-win 1:0.75 RR) over '
         + s.setups + ' A+ setups'
         + ' · avg ' + (s.avgR >= 0 ? '+' : '') + s.avgR.toFixed(2) + 'R realized';
       if(s.byGrade){
@@ -932,7 +932,7 @@ const INITIAL = {{ payload|tojson }};
             + (v.avgR >= 0 ? '+' : '') + (v.avgR || 0).toFixed(2) + 'R';
         }).filter(Boolean).join(' &nbsp;·&nbsp; ');
       }
-      h += '<br>SL beyond zone · TP 1:2 RR · A+ ~1 per 2–3 days · resolves ≤ 5h · past ≠ future</div>';
+      h += '<br>SL beyond zone · TP1 1:0.75 RR / TP2 1:1.5 RR · A+ ~1 per 2–3 days · resolves ≤ 5h · past ≠ future</div>';
     }
     // session quality + risk calculator
     const ss = state.data && state.data.sessionStats;
@@ -1088,7 +1088,9 @@ const INITIAL = {{ payload|tojson }};
         + '<span>now ' + fmtP(price) + '</span>'
         + '<span>' + (live.status === 'tp1hit' ? 'TP2 ' + fmtP(live.tp2) : 'TP1 ' + fmtP(live.tp1)) + '</span></div>'
         + '<div class="small muted" style="margin-top:6px">banked '
-        + (live.status === 'tp1hit' ? '+1.0R' : '0R')
+        + (live.status === 'tp1hit'
+            ? '+' + (0.5 * Math.abs(live.tp1 - live.entry) / (Math.abs(live.entry - live.sl) || 1)).toFixed(2) + 'R'
+            : '0R')
         + ' · since ' + fmtDT(live.openedAt) + ' · manages: half at TP1 → BE stop → runner to TP2</div></div>';
     }
     const sigs = trk.signals || [];

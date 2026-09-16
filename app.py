@@ -502,11 +502,11 @@ def maybe_momentum_alert(ent):
     _armed_mem["t"] = now
     d = 1 if ent["direction"] == "LONG" else -1
     a = max(float(ent.get("atr") or 0.0), 0.5)
-    risk = 1.5 * a                              # stop distance = 1.5×ATR
+    risk = 2.5 * a                              # stop distance = 2.5×ATR (high-win)
     entry = float(price)
     sl = entry - d * risk
-    tp = entry + d * 1.5 * risk                 # 1:1.5 RR — higher hit rate
-    tp2 = entry + d * 2.5 * risk                # runner for the tracker
+    tp = entry + d * 0.75 * risk                # TP1 0.75R — half off, high hit rate
+    tp2 = entry + d * 1.5 * risk                # TP2 runner 1.5R
     side = ent["zoneSide"]
     lbl = "Support" if side == "demand" else "Resistance"
     lo, hi = ent["entryZone"][0], ent["entryZone"][1]
@@ -522,10 +522,11 @@ def maybe_momentum_alert(ent):
             f"{lo:,.1f}\u2013{hi:,.1f} ({ent['passed']}/8)\n\n"
             f"\U0001F3AF Entry: {entry:,.2f} (market now)\n"
             f"\U0001F6D1 SL: {sl:,.2f}\n"
-            f"\U0001F3AF TP: {tp:,.2f} (1:1.5 RR)\n\n"
+            f"\U0001F3AF TP1: {tp:,.2f} (half off \u00b7 1:0.75 RR)\n"
+            f"\U0001F3AF TP2: {tp2:,.2f} (runner \u00b7 1:1.5 RR)\n\n"
             f"\U0001F449 Trade now on your own broker\n\n"
             f"\u2B50 SNR Rating: MOMENTUM ({ent['passed']}/8)\n"
-            f"\U0001F4CA Backtest: 44% win \u00b7 +0.20R avg (London/NY only)\n"
+            f"\U0001F4CA Backtest: 68% win \u00b7 +0.15R avg (SL 2.5\u00d7ATR, London/NY)\n"
             f"\u26A0 Not a zone retest \u2014 momentum entry, smaller size")
     track_signal("MOMENTUM", key, ent["direction"], entry, sl, tp, tp2)
 
@@ -750,10 +751,12 @@ def update_trade_tracker():
         now = int(time.time())
         # 5h timeout (20 x 15m bars)
         timed_out = now - tr["openedAt"] > 20 * 15 * 60
+        r_tp1 = round(0.5 * abs(tp1 - entry) / sl_dist, 2)
+        r_tp2 = round(r_tp1 + 0.5 * abs(tp2 - entry) / sl_dist, 2)
         if tr["status"] == "open":
             if (d == 1 and price >= tp1) or (d == -1 and price <= tp1):
                 tr["status"] = "tp1hit"; tr["tp1At"] = now
-                fired.append(("TP1_HIT", f"TP1 hit at {tp1:,.1f} · half banked +1.0R · stop moved to breakeven {entry:,.1f} · runner targets {tp2:,.1f}"))
+                fired.append(("TP1_HIT", f"TP1 hit at {tp1:,.1f} · half banked +{r_tp1:.2f}R · stop moved to breakeven {entry:,.1f} · runner targets {tp2:,.1f}"))
             elif (d == 1 and price <= sl) or (d == -1 and price >= sl):
                 _close_trade(tr, "loss", -1.0, price)
                 fired.append(("SL_HIT", f"Stopped out at {sl:,.1f} · -1.0R · next setup will come, patience"))
@@ -763,13 +766,13 @@ def update_trade_tracker():
                 fired.append(("TIMEOUT", f"5h timeout — closed at market {price:,.1f} ({r:+.2f}R on the runner half)"))
         if tr.get("status") == "tp1hit":
             if (d == 1 and price >= tp2) or (d == -1 and price <= tp2):
-                _close_trade(tr, "win", 2.5, price)
-                fired.append(("TP2_HIT", f"TP2 hit at {tp2:,.1f} · runner closed · total +2.5R on the signal 🎯"))
+                _close_trade(tr, "win", r_tp2, price)
+                fired.append(("TP2_HIT", f"TP2 hit at {tp2:,.1f} · runner closed · total +{r_tp2:.2f}R on the signal 🎯"))
             elif (d == 1 and price <= entry) or (d == -1 and price >= entry):
-                _close_trade(tr, "be", 1.0, price)
-                fired.append(("BE_STOP", f"Runner stopped at breakeven {entry:,.1f} · signal finishes +1.0R (TP1 banked)"))
+                _close_trade(tr, "be", r_tp1, price)
+                fired.append(("BE_STOP", f"Runner stopped at breakeven {entry:,.1f} · signal finishes +{r_tp1:.2f}R (TP1 banked)"))
             elif timed_out:
-                r = 1.0 + 0.5 * d * (price - entry) / sl_dist
+                r = r_tp1 + 0.5 * d * (price - entry) / sl_dist
                 _close_trade(tr, "timeout", r, price)
                 fired.append(("TIMEOUT", f"5h timeout — runner closed at market {price:,.1f} · total {r:+.2f}R"))
         if fired:

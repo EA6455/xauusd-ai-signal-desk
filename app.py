@@ -105,22 +105,106 @@ def _save_state():
 TG_CHATS = [c.strip() for c in TG_CHAT.split(",") if c.strip()]
 
 
-def _notify(text):
-    """Send a Telegram message to every configured chat (private and/or group).
-    TELEGRAM_CHAT_ID may be a comma-separated list of chat ids."""
+TG_TOPIC_FILE = os.path.join(BASE, "telegram_topics.json")
+_TG_TOPICS = None
+
+
+def _tg_topics():
+    """{'signal': thread_id, 'news': thread_id} for the forum group, learned
+    automatically by tg_topic_detect(). Empty while the group has no topics."""
+    global _TG_TOPICS
+    if _TG_TOPICS is None:
+        try:
+            with open(TG_TOPIC_FILE) as f:
+                _TG_TOPICS = json.load(f)
+        except Exception:  # noqa: BLE001
+            _TG_TOPICS = {}
+    return _TG_TOPICS
+
+
+def _notify(text, cat="signal"):
+    """Send a Telegram message to every configured chat (private and/or
+    group). In a forum group each message lands in its own topic:
+    cat='signal' → SIGNALS topic, cat='news' → NEWS topic (auto-learned).
+    Private chats are unaffected."""
     if not (TG_TOKEN and TG_CHATS):
         return
     import urllib.request
+    tops = _tg_topics()
     for chat in TG_CHATS:
         try:
+            payload = {"chat_id": chat, "text": text}
+            if chat.startswith("-100"):
+                tid = tops.get(cat)
+                if tid:
+                    payload["message_thread_id"] = int(tid)
             req = urllib.request.Request(
                 f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-                data=json.dumps({"chat_id": chat, "text": text}).encode(),
+                data=json.dumps(payload).encode(),
                 headers={"Content-Type": "application/json"})
             urllib.request.urlopen(req, timeout=10)
             print(f"[tg] sent to {chat}: {text[:50]!r}", flush=True)
         except Exception as e:  # noqa: BLE001
             print(f"[tg] FAILED to {chat}: {e}", flush=True)
+
+
+def tg_topic_detect(updates=None):
+    """Auto-learn the group's forum topics. When Topics are enabled and topics
+    are created, the bot receives forum_topic_created service messages and
+    maps them by name: a topic with 'news' in the name gets the news alerts;
+    one with signal/trade/entry/snr/alert gets the signal cards. Whichever
+    category has no own topic falls back to General (topic 1). Runs every
+    background-loop pass until both topics are known; cached to disk."""
+    global _TG_TOPICS
+    tops = _tg_topics()
+    if tops.get("complete"):
+        return tops
+    if not (TG_TOKEN and TG_CHATS):
+        return None
+    group = next((c for c in TG_CHATS if c.startswith("-100")), None)
+    if not group:
+        return None
+    if updates is None:
+        import urllib.request
+        try:
+            req = urllib.request.Request(
+                f"https://api.telegram.org/bot{TG_TOKEN}/getUpdates",
+                data=json.dumps({"limit": 100}).encode(),
+                headers={"Content-Type": "application/json"})
+            updates = json.load(urllib.request.urlopen(req, timeout=10)).get("result", [])
+        except Exception:  # noqa: BLE001
+            return None
+    forum = False
+    found = {}
+    for u in updates or []:
+        m = u.get("message") or {}
+        if str(m.get("chat", {}).get("id")) != group:
+            continue
+        fc = m.get("forum_topic_created")
+        if not fc:
+            continue
+        forum = True
+        name = (fc.get("name") or "").lower()
+        tid = m.get("message_thread_id") or m["message_id"]
+        if "news" in name:
+            found["news"] = tid
+        elif any(w in name for w in ("signal", "trade", "entry", "snr", "alert")):
+            found["signal"] = tid
+    if not forum or not found:
+        return None
+    tops = dict(signal=found.get("signal", 1), news=found.get("news", 1),
+                complete=("signal" in found and "news" in found))
+    _TG_TOPICS = tops
+    try:
+        with open(TG_TOPIC_FILE, "w") as f:
+            json.dump(tops, f)
+    except OSError:
+        pass
+    print(f"[tg] forum topics detected: {tops}", flush=True)
+    if tops["complete"]:
+        _notify("✅ Topic routing active — news \u2192 NEWS topic \u00b7 "
+                "signals \u2192 SIGNALS topic", cat="signal")
+    return tops
 
 
 # ------------------------------------------------------------------ models
@@ -1312,7 +1396,7 @@ def fundamental_watch():
                 _notify(f"📅 HIGH-IMPACT EVENT — {e['title']}\n\n"
                         f"⏰ Starts in ~{e['minutesTo']} min ({when} UTC)\n"
                         f"🌍 Currency: {e['country']}{fc}\n\n"
-                        f"💰 XAUUSD — expect volatility")
+                        f"💰 XAUUSD — expect volatility", cat="news")
     except Exception:  # noqa: BLE001
         pass
     # ---- news forwarding (gold-relevant, WatcherGuru + Google News) ----
@@ -1353,7 +1437,7 @@ def fundamental_watch():
                 STATE["newsSeen"] = dict(lastTs=newest, lastFwd=now, keys=keys)
                 _save_state()
                 _web_alert("NEWS", txt[:140])
-                _notify(f"📰 GOLD-RELEVANT NEWS\n\n{txt[:400]}")
+                _notify(f"📰 GOLD-RELEVANT NEWS\n\n{txt[:400]}", cat="news")
                 break
         else:
             STATE["newsSeen"] = dict(lastTs=newest)
@@ -1384,6 +1468,10 @@ def _self_keepalive():
 
 def _background_loop():
     while True:
+        try:
+            tg_topic_detect()         # auto-learn forum topics (no-op when done)
+        except Exception:  # noqa: BLE001
+            pass
         try:
             _self_keepalive()
         except Exception:  # noqa: BLE001

@@ -75,8 +75,9 @@ def app_version():
 # ------------------------------------------------------------------ state
 STATE_LOCK = threading.Lock()
 STATE = dict(alerts=[], priceAlerts=[], lastSig={}, lastPrice=None,
-             liveTrade=None, tradeHistory=[], lastSigT={}, lastSetup=None,
-             lastSetupT=0.0, eventAlerted=[], newsSeen=None, brokerOffset=0.0)
+             liveTrade=None, tradeHistory=[], signalTrades=[], lastSigT={},
+             lastSetup=None, lastSetupT=0.0, eventAlerted=[], newsSeen=None,
+             brokerOffset=0.0)
 try:
     with open(STATE_PATH) as f:
         _loaded = json.load(f)
@@ -399,6 +400,7 @@ def maybe_momentum_alert(ent):
     entry = float(price)
     sl = entry - d * risk
     tp = entry + d * 2.0 * risk                 # 1:2 RR
+    tp2 = entry + d * 3.0 * risk                # runner for the tracker
     side = ent["zoneSide"]
     lbl = "Support" if side == "demand" else "Resistance"
     lo, hi = ent["entryZone"][0], ent["entryZone"][1]
@@ -418,6 +420,7 @@ def maybe_momentum_alert(ent):
             f"\U0001F449 Trade now on your own broker\n\n"
             f"\u2B50 SNR Rating: MOMENTUM ({ent['passed']}/8)\n"
             f"\u26A0 Not a zone retest \u2014 momentum entry, smaller size")
+    track_signal("MOMENTUM", key, ent["direction"], entry, sl, tp, tp2)
 
 
 def maybe_setup_alert(ent):
@@ -479,6 +482,8 @@ def maybe_setup_alert(ent):
         f"🎯 TP: {ent['tp1']:,.2f}\n\n"
         f"👉 Trade now on your own broker\n\n"
         f"⭐ SNR Rating: {grade}{warn}")
+    track_signal(grade, key, ent["direction"], ent["entry"], ent["sl"],
+                 ent["tp1"], ent["tp2"])
 
 
 def _close_trade(tr, result, r, price):
@@ -486,6 +491,117 @@ def _close_trade(tr, result, r, price):
               closedAt=int(time.time()), closePrice=round(float(price), 2))
     STATE["tradeHistory"].insert(0, dict(tr))
     del STATE["tradeHistory"][25:]
+
+
+# ------------------------------------------------- every-signal tracker
+# EVERY entry card (A+/B+/C+ retest + MOMENTUM) opens its own tracked
+# position and is followed to TP or SL — one result card per event.
+
+
+def track_signal(src, key, direction, entry, sl, tp1, tp2):
+    """Open a tracked position for a fired signal card (dedup per key)."""
+    with STATE_LOCK:
+        sigs = STATE.get("signalTrades") or []
+        if any(s.get("key") == key for s in sigs):
+            return
+        hist = STATE.get("tradeHistory") or []
+        if any(h.get("key") == key and h.get("src") == src for h in hist):
+            return
+        # the featured A+ live tracker already manages this zone — skip dup
+        lt = STATE.get("liveTrade")
+        if lt and lt.get("status") in ("open", "tp1hit") and lt.get("key") in key:
+            return
+        sigs.append(dict(key=key, src=src, dir=direction,
+                         entry=round(float(entry), 2), sl=round(float(sl), 2),
+                         tp1=round(float(tp1), 2), tp2=round(float(tp2), 2),
+                         openedAt=int(time.time()), status="open",
+                         result=None, r=0.0))
+        STATE["signalTrades"] = sigs[-20:]
+        _save_state()
+
+
+def update_signal_trades():
+    """Step every open signal trade to its outcome: TP1 -> half banked +1.0R,
+    stop to breakeven, runner to TP2 (+2.5R); SL -> -1.0R; 5h timeout.
+    One alert + phone card per event, labeled with the signal's source."""
+    price, _src = tick_spot()
+    if price is None:
+        return
+    fired = []
+    with STATE_LOCK:
+        sigs = STATE.get("signalTrades") or []
+        changed = False
+        for tr in sigs:
+            if tr.get("status") == "closed":
+                continue
+            d = 1 if tr["dir"] == "LONG" else -1
+            entry, sl, tp1, tp2 = tr["entry"], tr["sl"], tr["tp1"], tr["tp2"]
+            sl_dist = abs(entry - sl) or 1.0
+            now = int(time.time())
+            timed_out = now - tr["openedAt"] > 20 * 15 * 60
+            if tr["status"] == "open":
+                if (d == 1 and price >= tp1) or (d == -1 and price <= tp1):
+                    tr["status"] = "tp1hit"; tr["tp1At"] = now
+                    changed = True
+                    fired.append((tr, "TP1_HIT",
+                                  f"TP1 hit at {tp1:,.1f} · half banked +1.0R · "
+                                  f"stop to breakeven {entry:,.1f} · runner {tp2:,.1f}"))
+                elif (d == 1 and price <= sl) or (d == -1 and price >= sl):
+                    _close_trade(tr, "loss", -1.0, price)
+                    changed = True
+                    fired.append((tr, "SL_HIT", f"Stopped out at {sl:,.1f} · -1.0R"))
+                elif timed_out:
+                    r = 0.5 * d * (price - entry) / sl_dist
+                    _close_trade(tr, "timeout", r, price)
+                    changed = True
+                    fired.append((tr, "TIMEOUT",
+                                  f"5h timeout — closed {price:,.1f} ({r:+.2f}R)"))
+            if tr.get("status") == "tp1hit":
+                if (d == 1 and price >= tp2) or (d == -1 and price <= tp2):
+                    _close_trade(tr, "win", 2.5, price)
+                    changed = True
+                    fired.append((tr, "TP2_HIT",
+                                  f"TP2 hit at {tp2:,.1f} · total +2.5R 🎯"))
+                elif (d == 1 and price <= entry) or (d == -1 and price >= entry):
+                    _close_trade(tr, "be", 1.0, price)
+                    changed = True
+                    fired.append((tr, "BE_STOP",
+                                  f"Runner stopped at breakeven {entry:,.1f} · "
+                                  f"total +1.0R (TP1 banked)"))
+                elif timed_out:
+                    r = 1.0 + 0.5 * d * (price - entry) / sl_dist
+                    _close_trade(tr, "timeout", r, price)
+                    changed = True
+                    fired.append((tr, "TIMEOUT",
+                                  f"5h timeout — runner closed {price:,.1f} · "
+                                  f"total {r:+.2f}R"))
+        if changed:
+            STATE["signalTrades"] = [s for s in sigs if s.get("status") != "closed"]
+            _save_state()
+    for tr, typ, msg in fired:
+        src = tr.get("src", "SIGNAL")
+        with STATE_LOCK:
+            a = dict(id=_next_id(), time=int(time.time()), tf="15m", type=typ,
+                     price=round(float(price), 2), score=0.0, confidence=None,
+                     msg=f"{src} {tr['dir']} · {msg}")
+            STATE["alerts"].insert(0, a)
+            del STATE["alerts"][100:]
+            _save_state()
+        icon = {"TP1_HIT": "✅", "TP2_HIT": "🎯", "SL_HIT": "🛑",
+                "BE_STOP": "⚖️", "TIMEOUT": "⏱"}.get(typ, "•")
+        head = {"TP1_HIT": "TP1 HIT", "TP2_HIT": "TP2 HIT", "SL_HIT": "SL HIT",
+                "BE_STOP": "BREAKEVEN STOP", "TIMEOUT": "TIMEOUT · 5h"}.get(typ, typ)
+        long = tr["dir"] == "LONG"
+        _notify(f"{icon} {head} — {src} {tr['dir']} SIGNAL\n\n"
+                f"📊 Timeframe: 15M\n"
+                f"💰 Symbol: XAUUSD\n"
+                f"{'🟢' if long else '🔴'} Direction: {tr['dir']}\n\n"
+                f"🎯 Entry: {tr['entry']:,.2f}\n"
+                f"🛑 SL: {tr['sl']:,.2f}\n"
+                f"🎯 TP1: {tr['tp1']:,.2f}\n"
+                f"🎯 TP2: {tr['tp2']:,.2f}\n\n"
+                f"📈 {msg}\n\n"
+                f"⭐ Source card: {src} · tracked automatically")
 
 
 def ensure_trade(ent):
@@ -1151,7 +1267,9 @@ def refresh(tf, force=False, allow_build=True, symbol="XAUUSD"):
                 st.payload["note"] = note
                 st.payload["aiDesk"] = desk
                 st.payload["tracker"] = dict(live=STATE.get("liveTrade"),
-                                             history=STATE.get("tradeHistory", [])[:8])
+                                             history=STATE.get("tradeHistory", [])[:8],
+                                             signals=[s for s in (STATE.get("signalTrades") or [])
+                                                      if s.get("status") != "closed"][:6])
         return st.payload
 
 
@@ -1722,6 +1840,11 @@ def health():
 # Start the realtime feed + background loop at import time so WSGI servers
 # (gunicorn in the Dockerfile) get it too — start_background() is idempotent
 # and an flock keeps it to ONE loop per machine even with multiple workers.
+start_background()
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=7860, threaded=True, debug=False)
+
 start_background()
 
 if __name__ == "__main__":

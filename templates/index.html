@@ -498,7 +498,8 @@
       (HH·HL / LH·LL), break of structure, the origin zone that caused it, first retest with
       engulfing/pin confirmation, 1H trend agreement, SL beyond the zone, TP at 1:2 RR —
       and never during dead hours.</li>
-      <li><b>Signal Tracker</b> — every A+ signal is managed live: half banked at TP1 (+1.0R),
+      <li><b>Signal Tracker</b> — <b>every signal card</b> (A+/B+/C+ retest and ⚡ momentum)
+      is tracked live to its final TP or SL: half banked at TP1 (+1.0R),
       stop to breakeven, runner to TP2 (+2.5R). You get alerts at every step, and the
       outcome history builds up on the card.</li>
     </ul>
@@ -1090,16 +1091,26 @@ const INITIAL = {{ payload|tojson }};
         + (live.status === 'tp1hit' ? '+1.0R' : '0R')
         + ' · since ' + fmtDT(live.openedAt) + ' · manages: half at TP1 → BE stop → runner to TP2</div></div>';
     }
+    const sigs = trk.signals || [];
+    if(sigs.length){
+      h += '<div class="trk-hist">' + sigs.map(t =>
+        '<div class="trk-row"><span class="al-time mono">' + fmtDT(t.openedAt) + '</span>'
+        + '<b style="color:' + (t.dir === 'LONG' ? 'var(--green)' : 'var(--red)') + '">'
+        + (t.dir === 'LONG' ? '▲' : '▼') + '</b>'
+        + '<span class="muted small">' + (t.src || '') + ' @ ' + fmtP(t.entry) + '</span>'
+        + '<span class="trk-status ' + (t.status === 'tp1hit' ? 'tp1hit' : 'open') + '">'
+        + (t.status === 'tp1hit' ? 'TP1 ✅' : 'RUNNING') + '</span></div>').join('') + '</div>';
+    }
     if(hist.length){
       h += '<div class="trk-hist">' + hist.slice(0, 5).map(t =>
         '<div class="trk-row"><span class="al-time mono">' + fmtDT(t.closedAt) + '</span>'
         + '<b style="color:' + (t.dir === 'LONG' ? 'var(--green)' : 'var(--red)') + '">'
         + (t.dir === 'LONG' ? '▲' : '▼') + '</b>'
-        + '<span class="muted small">' + fmtP(t.entry) + '</span>'
+        + '<span class="muted small">' + (t.src ? t.src + ' · ' : '') + fmtP(t.entry) + '</span>'
         + '<span class="trk-r" style="color:' + (t.r > 0 ? 'var(--green)' : t.r < 0 ? 'var(--red)' : 'var(--muted)') + '">'
         + (t.r >= 0 ? '+' : '') + t.r.toFixed(1) + 'R</span></div>').join('') + '</div>';
     }
-    body.innerHTML = h || '<div class="muted small">no live signal — waiting for an A+ setup</div>';
+    body.innerHTML = h || '<div class="muted small">no open signals — every card (A+/B+/C+/MOMENTUM) is tracked to TP or SL</div>';
   }
 
   // ---------- data loading ----------

@@ -904,6 +904,7 @@ const INITIAL = {{ payload|tojson }};
         + lvl('TP2 · 1:' + e.rr2.toFixed(1) + ' RR', e.tp2.toFixed(1), 'var(--green)')
         + lvl('Risk (ATR)', e.atr.toFixed(2))
         + lvl('Structure', e.trend1h)
+        + (e.contZone ? lvl('Zone type', 'CONTINUATION · shallow pullback', 'var(--gold)') : '')
         + (e.htf ? lvl('HTF confluence', e.htf.tf + ' ' +
             (e.zoneSide === 'demand' ? 'demand' : 'supply') + ' ' +
             e.htf.bottom.toFixed(0) + '–' + e.htf.top.toFixed(0), 'var(--purple)') : '')

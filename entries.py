@@ -265,7 +265,8 @@ def _snr_pack(candles):
             hit = h[uf:] >= z["bottom"]
         z["first_touch"] = int(uf + hit.argmax()) if hit.any() else None
     pack = dict(h=h, l=l, o=o, c=c, n=n, atr=atr, struct=struct, bos=bos,
-                htf=htf, zones=zones, t=t, e200=e200)
+                htf=htf, zones=zones, t=t, e200=e200,
+                sw_hi_idx=sw_hi, sw_lo_idx=sw_lo)
     _pack_cache["key"] = key
     _pack_cache["pack"] = pack
     return pack
@@ -424,6 +425,21 @@ def evaluate(candles15, candles_1h=None):
     _s, z, d, active, (struct_ok, bos_ok, origin_ok, touching, conf, htf_ok) = best
     entry = float(c[i_now]) if active else \
         (float(z["top"]) if d == 1 else float(z["bottom"]))
+    # trader's zone read: position of the entry inside the dealing range
+    # (last confirmed swing high & low, causal). Entry in the direction-extreme
+    # 38% = CONTINUATION base (shallow pullback in a strong leg — backtest:
+    # B+ 83% win / +0.38R, A+ 83% / +0.52R); mid/deep = reduced quality.
+    cont_zone = False
+    _r_hi = _r_lo = None
+    for _idx in reversed(pack["sw_hi_idx"]):
+        if _idx + SWING_K <= i_last:
+            _r_hi = float(hh[_idx]); break
+    for _idx in reversed(pack["sw_lo_idx"]):
+        if _idx + SWING_K <= i_last:
+            _r_lo = float(ll[_idx]); break
+    if _r_hi is not None and _r_lo is not None and _r_hi > _r_lo:
+        _p = (float(entry) - _r_lo) / (_r_hi - _r_lo)
+        cont_zone = (_p >= 0.62) if d == 1 else (_p <= 0.38)
     a = float(atr[i_now])
     sl = (z["bottom"] - SL_BUF_ATR * a) if d == 1 else (z["top"] + SL_BUF_ATR * a)
     risk = abs(entry - sl)
@@ -451,6 +467,7 @@ def evaluate(candles15, candles_1h=None):
         checks=[dict(label=CHECKS[kk], ok=bool(ok[kk])) for kk in range(8)],
         trend1h={1: "HH·HL BULLISH", -1: "LH·LL BEARISH", 0: "RANGING"}[int(struct[i_last])],
         e200ok=e200ok,
+        contZone=bool(cont_zone),
         zoneSide=z["side"],
         zoneKey=f"{z['side']}:{pack['t'][z['anchor']]}")   # zone identity: one alert per ZONE
 

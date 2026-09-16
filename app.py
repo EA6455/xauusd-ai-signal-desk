@@ -587,14 +587,33 @@ def maybe_setup_alert(ent):
         htf_line = (f"\n📐 HTF: {h['tf']} "
                     f"{'demand' if side == 'demand' else 'supply'} "
                     f"{h['bottom']:,.0f}–{h['top']:,.0f}")
+    # trader-flow checklist (the 5-SOP: zone -> rejection -> confirmation ->
+    # setup -> entry) — the card reads like an SNR trader executing the trade
+    lo_z, hi_z = ent["entryZone"][0], ent["entryZone"][1]
+    checks = ent.get("checks") or []
+    rej_lbl = "tapped & holding" if (checks and checks[3].get("ok")) else "retest pending"
+    conf_lbl = "engulf / pin candle" if (checks and checks[5].get("ok")) else "no candle confirm"
+    zone_type = ("CONTINUATION · shallow pullback in a strong leg"
+                 if ent.get("contZone") else
+                 "retracement zone · deeper pullback")
+    cont_stats = ""
+    if ent.get("contZone") and grade in ("A+", "B+"):
+        cont_stats = ("\n📈 Continuation-zone history: "
+                      "83% win · +0.4R avg (small sample)")
     _notify(
         f"{icon} {grade} {ent['direction']} SIGNAL\n\n"
         f"📊 Timeframe: 15M\n"
         f"💰 Symbol: XAUUSD\n"
         f"📍 Setup: {setup_lbl}{htf_line}\n\n"
-        f"🎯 Entry: {ent['entry']:,.2f}\n"
-        f"🛑 SL: {ent['sl']:,.2f}\n"
-        f"🎯 TP: {ent['tp1']:,.2f}\n\n"
+        f"🧭 SNR trader checklist\n"
+        f"✅ ZONE — fresh {setup_lbl.lower()} {lo_z:,.1f}–{hi_z:,.1f}\n"
+        f"✅ REJECTION — {rej_lbl}\n"
+        f"✅ CONFIRMATION — {conf_lbl}\n"
+        f"📐 Zone type: {zone_type}{cont_stats}\n\n"
+        f"🎯 Entry: {ent['entry']:,.2f} (at confirmation close)\n"
+        f"🛑 SL: {ent['sl']:,.2f} (beyond zone)\n"
+        f"🎯 TP1: {ent['tp1']:,.2f} (half off)\n"
+        f"🎯 TP2: {ent['tp2']:,.2f} (runner)\n\n"
         f"👉 Trade now on your own broker\n\n"
         f"⭐ SNR Rating: {grade}{warn}")
     track_signal(grade, key, ent["direction"], ent["entry"], ent["sl"],

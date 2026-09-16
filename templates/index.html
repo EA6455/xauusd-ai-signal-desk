@@ -494,7 +494,7 @@
       ⧉ dual-screen mode to watch two markets side by side. Gold keeps the realtime
       tick stream; other pairs poll live quotes every 10s.</li>
       <li><b>Strategy concepts</b> — beyond the core SNR retest: 🧹 <b>liquidity sweeps</b>
-      (wick through a zone + reclaim — stops taken), 📐 <b>HTF ladder</b> (15m setup inside a
+      (wick through a zone + reclaim, EMA200-aligned only — stops taken), 📐 <b>HTF ladder</b> (15m setup inside a
       4H zone upgrades the card), ⏸ <b>event black-out</b> (no new signal alerts 30 min
       before → 15 min after high-impact USD events).</li>
       <li><b>AI Analyst Desk</b> — eight independent models read the same chart (neural ML,
@@ -827,10 +827,11 @@ const INITIAL = {{ payload|tojson }};
             s.zone[0].toFixed(1) + ' – ' + s.zone[1].toFixed(1), 'var(--gold)')
       + lvl('Entry (reclaim)', s.entry.toFixed(1), 'var(--green)')
       + lvl('Stop loss', s.sl.toFixed(1), 'var(--red)')
-      + lvl('TP1 · 1:' + s.rr1.toFixed(1) + ' RR', s.tp1.toFixed(1), 'var(--green)')
+      + lvl('TP1 · 1:' + s.rr1.toFixed(0) + ' RR', s.tp1.toFixed(1), 'var(--green)')
+      + lvl('TP2 · 1:' + s.rr2.toFixed(0) + ' RR', s.tp2.toFixed(1), 'var(--green)')
       + '</div>';
     h += '<div class="small" style="margin:2px 0 6px; color:var(--muted)">' +
-      s.note + ' · ' + s.passed + '/4 confluence' +
+      s.note + ' · EMA200-aligned · ' + s.passed + '/' + (s.checksTotal || 3) + ' confluence' +
       (s.miss && s.miss.length ? ' · missing: ' + s.miss.join(', ') : '') + '</div>';
     const ss = state.data.sweepStats || {};
     h += '<div class="small muted">Sweeps (60d): ' + ['A','B'].map(function(g){

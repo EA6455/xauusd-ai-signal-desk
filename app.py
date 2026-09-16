@@ -408,7 +408,7 @@ def maybe_sweep_alert(sw):
     _web_alert("SWEEP", f"🧹 {sw['grade']} SWEEP {sw['direction']} reclaim @ "
                         f"{sw['entry']:,.2f} · swept {sw['zone'][0]:,.1f}–"
                         f"{sw['zone'][1]:,.1f} · SL {sw['sl']:,.2f} · "
-                        f"TP1 {sw['tp1']:,.2f} · {sw['passed']}/4")
+                        f"TP1 {sw['tp1']:,.2f} · {sw['passed']}/3")
     if not PHONE:
         return
     if time.time() - STATE.get("lastSetupT", 0) < SETUP_COOLDOWN_S:
@@ -418,15 +418,20 @@ def maybe_sweep_alert(sw):
     side_lbl = "Support" if sw["zoneSide"] == "demand" else "Resistance"
     icon = "🟢" if sw["direction"] == "LONG" else "🔴"
     warn = "" if sw["grade"] == "A+" else \
-        f"\n⚠ {sw['passed']}/4 confluence — reduced quality: smaller size or skip"
+        f"\n⚠ dead-session entry — smaller size or skip"
     _notify(f"{icon} {sw['grade']} SWEEP {sw['direction']} SIGNAL\n\n"
             f"📊 Timeframe: 15M\n"
             f"💰 Symbol: XAUUSD\n"
-            f"📍 Setup: Liquidity Sweep · {side_lbl}\n\n"
+            f"📍 Setup: Liquidity Sweep · {side_lbl} · EMA200-aligned\n\n"
             f"🎯 Entry: {sw['entry']:,.2f}\n"
             f"🛑 SL: {sw['sl']:,.2f}\n"
-            f"🎯 TP: {sw['tp1']:,.2f}\n\n"
+            f"🎯 TP1: {sw['tp1']:,.2f} (half off · 1:1 RR)\n"
+            f"🎯 TP2: {sw['tp2']:,.2f} (runner · 1:2 RR)\n\n"
+            f"👉 Trade now on your own broker\n\n"
+            f"📊 Backtest: 57% win · +0.12R avg (EMA200-aligned reclaim)\n"
             f"⭐ SNR Rating: {sw['grade']} SWEEP{warn}")
+    track_signal("SWEEP", key, sw["direction"], sw["entry"], sw["sl"],
+                 sw["tp1"], sw["tp2"])
 
 
 # ------------------------------------------------------------------ alerts
@@ -486,6 +491,8 @@ def maybe_momentum_alert(ent):
         return                                  # only C+/B+ quality zones arm
     if ent.get("session") not in ("london", "ny-overlap", "ny-late"):
         return          # backtest: London/NY only lifts momentum win 28.6%->44%
+    if not ent.get("e200ok"):
+        return          # never fight the big trend (EMA200, 15m)
     if _event_blackout():
         return                                  # it is a real entry signal now
     key = "armed:" + ent["zoneKey"]
@@ -526,7 +533,7 @@ def maybe_momentum_alert(ent):
             f"\U0001F3AF TP2: {tp2:,.2f} (runner \u00b7 1:1.5 RR)\n\n"
             f"\U0001F449 Trade now on your own broker\n\n"
             f"\u2B50 SNR Rating: MOMENTUM ({ent['passed']}/8)\n"
-            f"\U0001F4CA Backtest: 68% win \u00b7 +0.15R avg (SL 2.5\u00d7ATR, London/NY)\n"
+            f"\U0001F4CA Backtest: 68% win \u00b7 +0.18R avg (London/NY \u00b7 with EMA200 trend)\n"
             f"\u26A0 Not a zone retest \u2014 momentum entry, smaller size")
     track_signal("MOMENTUM", key, ent["direction"], entry, sl, tp, tp2)
 

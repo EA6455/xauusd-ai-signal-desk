@@ -245,6 +245,14 @@ def _snr_pack(candles):
     sw_hi, sw_lo = _swing_series(h, l)
     struct, bos = _structure_series(n, sw_hi, sw_lo)
     htf = _htf_series(t, c, n)
+    e200 = np.empty(n)
+    if n >= 200:
+        e200[199] = c[:200].mean()
+        _a = 2.0 / 201.0
+        for i in range(200, n):
+            e200[i] = _a * c[i] + (1 - _a) * e200[i - 1]
+    else:
+        e200[:] = np.nan
     zones = _build_zones(candles, h, l, atr, sw_hi, sw_lo)
     for z in zones:
         uf = z["usable_from"]
@@ -257,29 +265,31 @@ def _snr_pack(candles):
             hit = h[uf:] >= z["bottom"]
         z["first_touch"] = int(uf + hit.argmax()) if hit.any() else None
     pack = dict(h=h, l=l, o=o, c=c, n=n, atr=atr, struct=struct, bos=bos,
-                htf=htf, zones=zones, t=t)
+                htf=htf, zones=zones, t=t, e200=e200)
     _pack_cache["key"] = key
     _pack_cache["pack"] = pack
     return pack
 
 
-def _resolve_snr(entry, sl, tp, pack, i, d):
+def _resolve_snr(entry, sl, tp, pack, i, d, tp_r=None):
     """Outcome of an SNR trade triggered at bar i. Conservative: if SL and TP
-    are touched in the same bar, it counts as a LOSS."""
+    are touched in the same bar, it counts as a LOSS. tp_r overrides the
+    win multiple (sweeps use their own wider target)."""
     c, hh, ll = pack["c"], pack["h"], pack["l"]
     risk = abs(entry - sl)
+    win_r = TP1_R if tp_r is None else tp_r
     end = min(pack["n"], i + 1 + MAX_WAIT_BARS)
     for j in range(i + 1, end):
         if d == 1:
             if ll[j] <= sl:
                 return "loss", -1.0
             if hh[j] >= tp:
-                return "win", TP1_R
+                return "win", win_r
         else:
             if hh[j] >= sl:
                 return "loss", -1.0
             if ll[j] <= tp:
-                return "win", TP1_R
+                return "win", win_r
     if end < pack["n"]:                     # timed out — mark-to-market
         r = d * (c[end - 1] - entry) / risk
         return ("win" if r > 0 else "loss"), float(r)
@@ -421,9 +431,14 @@ def evaluate(candles15, candles_1h=None):
     tp2 = entry + d * TP2_R * risk
     ok = [struct_ok, bos_ok, origin_ok, True, touching, conf, htf_ok, sess_ok]
     passed = sum(ok)
+    _e2 = pack["e200"][i_last]
+    e200ok = bool(_e2 == _e2 and ((c[i_last] > _e2) if d == 1 else (c[i_last] < _e2)))
     # a setup grade only exists while price is actually RETESTING the zone;
-    # an untouched fresh zone stays in the "arming" state
+    # an untouched fresh zone stays in the "arming" state. C+ against the
+    # EMA200 trend is downgraded (backtest: 25% win / -0.56R -> 56% / -0.03)
     grade = (_grade(passed) or "—") if touching else "—"
+    if grade == "C+" and not e200ok:
+        grade = "—"
     return dict(
         direction="LONG" if d == 1 else "SHORT",
         passed=int(passed), grade=grade, touching=bool(touching),
@@ -435,6 +450,7 @@ def evaluate(candles15, candles_1h=None):
         rr1=TP1_R, rr2=TP2_R, atr=round(a, 2), barTime=pack["t"][i_now],
         checks=[dict(label=CHECKS[kk], ok=bool(ok[kk])) for kk in range(8)],
         trend1h={1: "HH·HL BULLISH", -1: "LH·LL BEARISH", 0: "RANGING"}[int(struct[i_last])],
+        e200ok=e200ok,
         zoneSide=z["side"],
         zoneKey=f"{z['side']}:{pack['t'][z['anchor']]}")   # zone identity: one alert per ZONE
 
@@ -443,8 +459,12 @@ def evaluate(candles15, candles_1h=None):
 # ---------------------------------------------------- liquidity sweeps
 SWEEP_MAX_WAIT = 3       # bars allowed beyond the zone before it's a breakdown
 SWEEP_DEPTH_ATR = 0.15   # wick must pierce the zone by this much (ATR fraction)
-SWEEP_CHECKS = ["Market structure", "1H trend aligned", "Session live",
-                "Reclaim candle"]
+SWEEP_TP1_R = 1.0                 # sweep exits run wider than retests
+SWEEP_TP2_R = 2.0
+SWEEP_CHECKS = ["EMA200 trend aligned", "Reclaim candle", "Session live"]
+# v2 (backtested, 4522 x 15m bars): the old 1H-trend check at the pierce bar
+# selected extended chases — old sweep "A+" won only 36%. EMA200-aligned
+# sweeps with a reclaim candle win 65% (+0.09R, n=20); others stay silent.
 
 
 def scan_sweeps(candles):
@@ -488,26 +508,31 @@ def scan_sweeps(candles):
                 k = j + 1                   # closed deep beyond = breakdown,
                 continue                     # not a sweep — skip this event
             conf = _confirm(o, c, hh, ll, j, d)
-            checks = [bool(pack["struct"][k] == d), bool(pack["htf"][k] == d),
-                      session_of(pack["t"][j]) != "dead", bool(conf)]
+            _e2 = pack["e200"][j]
+            aligned = bool(_e2 == _e2 and
+                           ((c[j] > _e2) if d == 1 else (c[j] < _e2)))
+            checks = [aligned, bool(conf),
+                      session_of(pack["t"][j]) != "dead"]
             passed = sum(checks)
             miss = [SWEEP_CHECKS[i] for i, okc in enumerate(checks) if not okc]
-            if passed >= 3:
+            if aligned and conf:
                 entry = float(c[j])
                 sl = ((float(min(ll[k:j + 1])) - 0.1 * atr[j]) if d == 1
                       else (float(max(hh[k:j + 1])) + 0.1 * atr[j]))
                 risk = abs(entry - sl)
                 if risk > 0:
-                    tp1 = entry + d * TP1_R * risk
-                    res, r = _resolve_snr(entry, sl, tp1, pack, j, d)
+                    tp1 = entry + d * SWEEP_TP1_R * risk
+                    tp2 = entry + d * SWEEP_TP2_R * risk
+                    res, r = _resolve_snr(entry, sl, tp1, pack, j, d,
+                                          tp_r=SWEEP_TP1_R)
                     if res is not None:
                         out.append(dict(
                             t=pack["t"][j], i=int(j),
                             dir="LONG" if d == 1 else "SHORT",
                             entry=round(entry, 1), sl=round(sl, 1),
-                            tp1=round(tp1, 1), outcome=res,
+                            tp1=round(tp1, 1), tp2=round(tp2, 1), outcome=res,
                             r=(round(r, 2) if r is not None else None),
-                            grade=("A+" if passed == 4 else "B+"),
+                            grade=("A+" if passed == 3 else "B+"),
                             passed=int(passed), miss=miss, side=z["side"],
                             zone=[round(float(z["bottom"]), 1),
                                   round(float(z["top"]), 1)],
@@ -525,9 +550,9 @@ def sweep_view(e):
     risk = abs(e["entry"] - e["sl"])
     return dict(kind="sweep", grade=e["grade"], direction=e["dir"],
                 entry=e["entry"], sl=e["sl"], tp1=e["tp1"],
-                tp2=round(e["entry"] + d * TP2_R * risk, 1),
-                rr1=TP1_R, rr2=TP2_R, zone=e["zone"], zoneSide=e["side"],
-                passed=e["passed"], checksTotal=4, barTime=e["t"],
+                tp2=e.get("tp2") or round(e["entry"] + d * TP2_R * risk, 1),
+                rr1=SWEEP_TP1_R, rr2=SWEEP_TP2_R, zone=e["zone"], zoneSide=e["side"],
+                passed=e["passed"], checksTotal=3, barTime=e["t"],
                 miss=e.get("miss") or [],
                 anchor=e["anchor"],
                 note=("Wick swept the " + e["side"] + " zone and price closed "

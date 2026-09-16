@@ -493,7 +493,8 @@
       when their API keys are configured — plus one 🌅 AI daily brief on Telegram.</li>
       <li><b>SNR Entry (15m)</b> — graded setups: <b style="color:var(--green)">A+</b> (8/8,
       tracked + phone), <b style="color:var(--amber)">B+</b> (7/8, phone with warning),
-      <b style="color:#7c8aa0">C+</b> (6/8, web only). Malaysian-style Supply &amp; Demand: market structure
+      <b style="color:#7c8aa0">C+</b> (6/8, phone with warning) — plus ⏳ setup-forming
+      heads-ups when price taps a fresh zone. Malaysian-style Supply &amp; Demand: market structure
       (HH·HL / LH·LL), break of structure, the origin zone that caused it, first retest with
       engulfing/pin confirmation, 1H trend agreement, SL beyond the zone, TP at 1:2 RR —
       and never during dead hours.</li>
@@ -816,7 +817,7 @@ const INITIAL = {{ payload|tojson }};
       return '<b style="color:' + (g === 'A' ? 'var(--green)' : 'var(--amber)') +
         '">' + g + '+</b> ' + v.setups + ' · ' + Math.round((v.winRate || 0) * 100) +
         '% · ' + (v.avgR >= 0 ? '+' : '') + (v.avgR || 0).toFixed(2) + 'R';
-    }).filter(Boolean).join(' · ') + ' · web watch only</div></div>';
+    }).filter(Boolean).join(' · ') + ' · reclaim watch</div></div>';
     body.innerHTML = h;
   }
 
@@ -889,7 +890,7 @@ const INITIAL = {{ payload|tojson }};
           + e.passed + '/8 confluence — reduced quality: smaller size or skip</div>';
       if(e.grade === 'C+')
         h += '<div class="small" style="margin:2px 0 10px; color:#7c8aa0">C+ · '
-          + e.passed + '/8 confluence — watchlist quality, web only</div>';
+          + e.passed + '/8 confluence — watchlist quality</div>';
     } else if(e.zoneSide){
       h += '<div class="lvls">'
         + lvl((e.zoneSide === 'supply' ? 'Supply zone' : 'Demand zone'),

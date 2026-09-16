@@ -292,7 +292,7 @@ _sweep_alerted = {"keys": []}
 def maybe_sweep_alert(sw):
     """Liquidity-sweep watch: web feed only (recent 60d stats below the phone
     bar — flip PHONE=True to also send cards). One alert per sweep event."""
-    PHONE = False
+    PHONE = True
     if not sw or sw.get("grade") not in ("A+", "B+"):
         return
     if _event_blackout():
@@ -422,18 +422,53 @@ def _asia_bo_watch():
                 f"⭐ SNR Rating: BREAKOUT")
 
 
+_zw_mem = {"t": 0.0, "keys": []}
+
+
+def maybe_zone_watch(ent):
+    """⏳ Heads-up: price just tapped a fresh SNR zone but the confluence
+    isn't complete yet — 'setup forming, watch this zone'. One per zone,
+    at least 45 minutes apart, live sessions only, event-gated."""
+    if not ent or not ent.get("zoneSide") or not ent.get("touching"):
+        return
+    if ent.get("active") or ent.get("grade") in ("A+", "B+", "C+"):
+        return                                  # full cards already cover it
+    if ent.get("passed", 0) < 4:
+        return                                  # too little going for it
+    if ent.get("session") == "dead" or _event_blackout():
+        return
+    key = ent.get("zoneKey") or f"{ent['direction']}:{ent['barTime']}"
+    now = time.time()
+    if key in _zw_mem["keys"] or now - _zw_mem["t"] < 45 * 60:
+        return
+    _zw_mem["keys"] = (_zw_mem["keys"] + [key])[-40:]
+    _zw_mem["t"] = now
+    side = ent["zoneSide"]
+    lbl = "Support" if side == "demand" else "Resistance"
+    lo, hi = ent["entryZone"][0], ent["entryZone"][1]
+    _web_alert("WATCH", f"setup forming · {side} {lo:,.1f}–{hi:,.1f} · "
+                        f"{ent['passed']}/8 checks")
+    _notify(f"⏳ SETUP FORMING — XAUUSD\n\n"
+            f"📍 Price is testing a fresh {lbl} zone\n"
+            f"📐 Zone: {lo:,.1f} – {hi:,.1f}\n"
+            f"🧩 {ent['passed']}/8 confluence so far\n\n"
+            f"⏳ Waiting for the confirmation candle\n"
+            f"📈 A+ / B+ signal card follows if it completes\n\n"
+            f"💰 XAUUSD · 15M")
+
+
 def maybe_setup_alert(ent):
     """Fire an alert on SNR retests, once per ZONE+GRADE (a setup that stays
-    live for hours must not re-alert every 15 minutes). A+ and B+ also go to
-    the phone (B+ carries a quality warning); C+ is web-only. Phone-worthy
-    grades share the SETUP_COOLDOWN_S anti-spam gap."""
+    live for hours must not re-alert every 15 minutes). All grades go to the
+    phone (B+/C+ carry quality warnings). Phone-worthy grades share the
+    SETUP_COOLDOWN_S anti-spam gap."""
     if not ent or not ent.get("touching"):
         return
     grade = ent.get("grade")
     if grade not in ("A+", "B+", "C+"):
         return
     key = (ent.get("zoneKey") or f"{ent['direction']}:{ent['barTime']}") + ":" + grade
-    phone = grade in ("A+", "B+")
+    phone = grade in ("A+", "B+", "C+")
     with STATE_LOCK:
         if STATE.get("lastSetup") == key:
             return
@@ -459,8 +494,12 @@ def maybe_setup_alert(ent):
     side = ent.get("zoneSide") or ("demand" if ent["direction"] == "LONG" else "supply")
     setup_lbl = "Support" if side == "demand" else "Resistance"
     icon = "🟢" if ent["direction"] == "LONG" else "🔴"
-    warn = "" if grade == "A+" else \
-        f"\n⚠ {ent['passed']}/8 confluence — reduced quality: smaller size or skip"
+    if grade == "A+":
+        warn = ""
+    elif grade == "B+":
+        warn = f"\n⚠ {ent['passed']}/8 confluence — reduced quality: smaller size or skip"
+    else:
+        warn = f"\n⚠ {ent['passed']}/8 confluence — watchlist quality: tiny size or paper trade"
     htf_line = ""
     if ent.get("htf"):
         h = ent["htf"]
@@ -1062,6 +1101,7 @@ def build_payload(tf, d, symbol="XAUUSD"):
             else:
                 ensure_trade(ent)
                 maybe_setup_alert(ent)
+                maybe_zone_watch(ent)
                 if payload.get("sweep"):
                     maybe_sweep_alert(payload["sweep"])
         except Exception:  # noqa: BLE001

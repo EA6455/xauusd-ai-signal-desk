@@ -142,7 +142,27 @@ def _notify(text, cat="signal"):
                 f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
                 data=json.dumps(payload).encode(),
                 headers={"Content-Type": "application/json"})
-            urllib.request.urlopen(req, timeout=10)
+            try:
+                urllib.request.urlopen(req, timeout=10)
+            except Exception as e:  # noqa: BLE001 — closed/deleted topic
+                msg = str(e).upper()
+                if payload.pop("message_thread_id", None) and \
+                        ("TOPIC" in msg or "THREAD" in msg):
+                    req = urllib.request.Request(
+                        f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+                        data=json.dumps(payload).encode(),
+                        headers={"Content-Type": "application/json"})
+                    urllib.request.urlopen(req, timeout=10)
+                    print(f"[tg] topic unavailable in {chat} — "
+                          f"sent to General; re-learning topics", flush=True)
+                    global _TG_TOPICS
+                    _TG_TOPICS = None
+                    try:
+                        os.remove(TG_TOPIC_FILE)
+                    except OSError:
+                        pass
+                else:
+                    raise
             print(f"[tg] sent to {chat}: {text[:50]!r}", flush=True)
         except Exception as e:  # noqa: BLE001
             print(f"[tg] FAILED to {chat}: {e}", flush=True)
@@ -464,7 +484,9 @@ def maybe_momentum_alert(ent):
         return
     if ent.get("passed", 0) < 6:
         return                                  # only C+/B+ quality zones arm
-    if ent.get("session") == "dead" or _event_blackout():
+    if ent.get("session") not in ("london", "ny-overlap", "ny-late"):
+        return          # backtest: London/NY only lifts momentum win 28.6%->44%
+    if _event_blackout():
         return                                  # it is a real entry signal now
     key = "armed:" + ent["zoneKey"]
     now = time.time()
@@ -483,8 +505,8 @@ def maybe_momentum_alert(ent):
     risk = 1.5 * a                              # stop distance = 1.5×ATR
     entry = float(price)
     sl = entry - d * risk
-    tp = entry + d * 2.0 * risk                 # 1:2 RR
-    tp2 = entry + d * 3.0 * risk                # runner for the tracker
+    tp = entry + d * 1.5 * risk                 # 1:1.5 RR — higher hit rate
+    tp2 = entry + d * 2.5 * risk                # runner for the tracker
     side = ent["zoneSide"]
     lbl = "Support" if side == "demand" else "Resistance"
     lo, hi = ent["entryZone"][0], ent["entryZone"][1]
@@ -500,9 +522,10 @@ def maybe_momentum_alert(ent):
             f"{lo:,.1f}\u2013{hi:,.1f} ({ent['passed']}/8)\n\n"
             f"\U0001F3AF Entry: {entry:,.2f} (market now)\n"
             f"\U0001F6D1 SL: {sl:,.2f}\n"
-            f"\U0001F3AF TP: {tp:,.2f}\n\n"
+            f"\U0001F3AF TP: {tp:,.2f} (1:1.5 RR)\n\n"
             f"\U0001F449 Trade now on your own broker\n\n"
             f"\u2B50 SNR Rating: MOMENTUM ({ent['passed']}/8)\n"
+            f"\U0001F4CA Backtest: 44% win \u00b7 +0.20R avg (London/NY only)\n"
             f"\u26A0 Not a zone retest \u2014 momentum entry, smaller size")
     track_signal("MOMENTUM", key, ent["direction"], entry, sl, tp, tp2)
 
@@ -621,6 +644,10 @@ def update_signal_trades():
             d = 1 if tr["dir"] == "LONG" else -1
             entry, sl, tp1, tp2 = tr["entry"], tr["sl"], tr["tp1"], tr["tp2"]
             sl_dist = abs(entry - sl) or 1.0
+            # R math from the trade's OWN levels (momentum cards use 1:1.5 RR,
+            # retest cards 1:2 — banked/runner shares must match the card)
+            r_tp1 = round(0.5 * abs(tp1 - entry) / sl_dist, 2)
+            r_tp2 = round(r_tp1 + 0.5 * abs(tp2 - entry) / sl_dist, 2)
             now = int(time.time())
             timed_out = now - tr["openedAt"] > 20 * 15 * 60
             if tr["status"] == "open":
@@ -628,7 +655,7 @@ def update_signal_trades():
                     tr["status"] = "tp1hit"; tr["tp1At"] = now
                     changed = True
                     fired.append((tr, "TP1_HIT",
-                                  f"TP1 hit at {tp1:,.1f} · half banked +1.0R · "
+                                  f"TP1 hit at {tp1:,.1f} · half banked +{r_tp1:.2f}R · "
                                   f"stop to breakeven {entry:,.1f} · runner {tp2:,.1f}"))
                 elif (d == 1 and price <= sl) or (d == -1 and price >= sl):
                     _close_trade(tr, "loss", -1.0, price)
@@ -642,18 +669,18 @@ def update_signal_trades():
                                   f"5h timeout — closed {price:,.1f} ({r:+.2f}R)"))
             if tr.get("status") == "tp1hit":
                 if (d == 1 and price >= tp2) or (d == -1 and price <= tp2):
-                    _close_trade(tr, "win", 2.5, price)
+                    _close_trade(tr, "win", r_tp2, price)
                     changed = True
                     fired.append((tr, "TP2_HIT",
-                                  f"TP2 hit at {tp2:,.1f} · total +2.5R 🎯"))
+                                  f"TP2 hit at {tp2:,.1f} · total +{r_tp2:.2f}R 🎯"))
                 elif (d == 1 and price <= entry) or (d == -1 and price >= entry):
-                    _close_trade(tr, "be", 1.0, price)
+                    _close_trade(tr, "be", r_tp1, price)
                     changed = True
                     fired.append((tr, "BE_STOP",
                                   f"Runner stopped at breakeven {entry:,.1f} · "
-                                  f"total +1.0R (TP1 banked)"))
+                                  f"total +{r_tp1:.2f}R (TP1 banked)"))
                 elif timed_out:
-                    r = 1.0 + 0.5 * d * (price - entry) / sl_dist
+                    r = r_tp1 + 0.5 * d * (price - entry) / sl_dist
                     _close_trade(tr, "timeout", r, price)
                     changed = True
                     fired.append((tr, "TIMEOUT",

@@ -189,22 +189,28 @@ _quote_mem = {}
 
 
 def get_quote(symbol, max_age=8):
-    """Latest traded price for a non-gold symbol (Yahoo chart meta).
-    Returns (price, epoch) or None. Cached a few seconds per symbol."""
-    if symbol not in SYMBOLS or symbol == "XAUUSD":
+    """Latest price for a symbol (Yahoo chart meta; gold via GC=F futures).
+    Returns (price, epoch, prev_close) or None. Cached per symbol."""
+    ysyms = None
+    if symbol == "XAUUSD":
+        ysyms = ["GC=F"]
+    elif symbol in SYMBOLS:
+        ysyms = SYMBOLS[symbol]["yahoo"]
+    if not ysyms:
         return None
     now = time.time()
     st = _quote_mem.get(symbol)
     if st and now - st["t"] < max_age:
         return st["q"]
     q = None
-    for ysym in SYMBOLS[symbol]["yahoo"]:
+    for ysym in ysyms:
         try:
             j = _http_json(f"https://query1.finance.yahoo.com/v8/finance/chart/"
                            f"{urllib.parse.quote(ysym)}?interval=1m&range=1d")
             m = j["chart"]["result"][0]["meta"]
             p = float(m["regularMarketPrice"])
-            q = (p, int(m.get("regularMarketTime") or now))
+            prev = float(m.get("chartPreviousClose") or m.get("previousClose") or p)
+            q = (p, int(m.get("regularMarketTime") or now), prev)
             break
         except Exception:  # noqa: BLE001
             continue

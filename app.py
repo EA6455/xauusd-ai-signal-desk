@@ -1586,6 +1586,52 @@ def del_price_alert(pid):
         return jsonify(priceAlerts=STATE["priceAlerts"])
 
 
+_watch_cache = {"t": 0.0, "items": None}
+
+
+@app.route("/api/watchlist")
+def api_watchlist():
+    """Live price + day change for every symbol (watchlist panel)."""
+    now = time.time()
+    if _watch_cache["items"] and now - _watch_cache["t"] < 20:
+        return jsonify(asOf=_watch_cache["t"], items=_watch_cache["items"])
+    items = []
+    try:
+        p, _src = tick_spot()
+        if p:
+            chg = None
+            try:
+                pl = tf_states.get(("XAUUSD", "60m")).payload
+                if pl:
+                    chg = pl.get("chg")
+            except Exception:  # noqa: BLE001
+                pass
+            items.append(dict(sym="XAUUSD", name="Gold", dec=2, price=round(p, 2),
+                              chg=round(chg, 2) if chg is not None else None,
+                              chgPct=round(chg / (p - chg) * 100, 2)
+                              if chg is not None and p != chg else None))
+    except Exception:  # noqa: BLE001
+        pass
+    for sym, cfg in data.SYMBOLS.items():
+        if sym == "XAUUSD":
+            continue
+        try:
+            q = data.get_quote(sym, max_age=50)
+            if not q:
+                continue
+            p, _ts, prev = q[0], q[1], q[2]
+            chg = p - prev if prev else None
+            items.append(dict(sym=sym, name=cfg["name"], dec=cfg.get("dec", 2),
+                              price=round(p, cfg.get("dec", 2)),
+                              chg=round(chg, cfg.get("dec", 2)) if chg is not None else None,
+                              chgPct=round(chg / prev * 100, 2) if chg is not None and prev else None))
+        except Exception:  # noqa: BLE001
+            continue
+    if items:
+        _watch_cache.update(t=now, items=items)
+    return jsonify(asOf=now, items=items)
+
+
 @app.route("/api/tick")
 def api_tick():
     symbol = request.args.get("symbol", "XAUUSD")
@@ -1596,7 +1642,7 @@ def api_tick():
         if not q:
             return jsonify(price=None, serverNow=int(time.time()),
                            source="unavailable", sym=symbol)
-        p, ts = q
+        p, ts = q[0], q[1]
         age = time.time() - ts
         dec = data.SYMBOLS[symbol].get("dec", 2)
         return jsonify(price=round(p, dec), serverNow=int(time.time()),

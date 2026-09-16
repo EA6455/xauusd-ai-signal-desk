@@ -76,8 +76,7 @@ def app_version():
 STATE_LOCK = threading.Lock()
 STATE = dict(alerts=[], priceAlerts=[], lastSig={}, lastPrice=None,
              liveTrade=None, tradeHistory=[], lastSigT={}, lastSetup=None,
-             lastSetupT=0.0, eventAlerted=[], newsSeen=None, brokerOffset=0.0,
-             asiaBO=None)
+             lastSetupT=0.0, eventAlerted=[], newsSeen=None, brokerOffset=0.0)
 try:
     with open(STATE_PATH) as f:
         _loaded = json.load(f)
@@ -325,103 +324,7 @@ def maybe_sweep_alert(sw):
             f"⭐ SNR Rating: {sw['grade']} SWEEP{warn}")
 
 
-def _asia_bo_watch():
-    """London breakout of the Asian range: breakout close -> retest ->
-    confirmation -> one card per day. Web feed + phone (event-gated)."""
-    now = time.time()
-    if entries.session_of(now) != "london":
-        return
-    today = time.strftime("%Y-%m-%d", time.gmtime())
-    st = STATE.get("asiaBO") or {}
-    if st.get("date") != today:
-        st = dict(date=today, stage="wait", dir=None, level=None,
-                  hi=None, lo=None, bi=None)
-        STATE["asiaBO"] = st
-        _save_state()
-    if st.get("stage") == "done":
-        return
-    try:
-        c15 = data.get_candles("15m").get("candles") or []
-    except Exception:  # noqa: BLE001
-        return
-    if len(c15) < 260:
-        return
-    day0 = calendar.timegm(time.strptime(today, "%Y-%m-%d"))
-    a0, a1 = day0 + 3600, day0 + 7 * 3600
-    asia = [k for k in c15 if a0 <= k["t"] < a1]
-    if len(asia) < 8:
-        return
-    hi, lo = max(k["h"] for k in asia), min(k["l"] for k in asia)
-    h = [k["h"] for k in c15[-40:]]
-    l = [k["l"] for k in c15[-40:]]
-    cc = [k["c"] for k in c15[-40:]]
-    atr = ml.atr(h, l, cc, 14)[-1] or 1.0
-    if not (0.4 * atr <= hi - lo <= 10 * atr):
-        STATE["asiaBO"] = dict(st, stage="done")
-        _save_state()
-        return
-    london = [k for k in c15 if k["t"] >= a1]
-    if not london:
-        return
-    if st["stage"] == "wait":
-        for k in london[:-1]:                    # closed bars only
-            if k["c"] > hi or k["c"] < lo:
-                br = "LONG" if k["c"] > hi else "SHORT"
-                STATE["asiaBO"] = dict(st, stage="broken", dir=br,
-                                       level=round(hi if br == "LONG" else lo, 1),
-                                       hi=hi, lo=lo, bi=k["t"])
-                _save_state()
-                break
-    st = STATE["asiaBO"]
-    if st["stage"] != "broken":
-        return
-    level, dr = st["level"], st["dir"]
-    tol = 0.25 * atr
-    for k in london[:-1]:
-        if k["t"] <= (st.get("bi") or 0):
-            continue
-        if dr == "LONG":
-            if k["c"] < level - 1.5 * atr:       # failed breakout
-                STATE["asiaBO"] = dict(st, stage="wait", dir=None, level=None, bi=None)
-                _save_state()
-                return
-            if k["l"] <= level + tol and k["c"] > k["o"] and k["c"] > level:
-                entry = k["c"]
-                break
-        else:
-            if k["c"] > level + 1.5 * atr:
-                STATE["asiaBO"] = dict(st, stage="wait", dir=None, level=None, bi=None)
-                _save_state()
-                return
-            if k["h"] >= level - tol and k["c"] < k["o"] and k["c"] < level:
-                entry = k["c"]
-                break
-        if k["t"] - (st.get("bi") or 0) > 12 * 900:   # no retest in 12 bars
-            STATE["asiaBO"] = dict(st, stage="done")
-            _save_state()
-            return
-    else:
-        return
-    STATE["asiaBO"] = dict(st, stage="done")
-    _save_state()
-    d = 1 if dr == "LONG" else -1
-    sl = entry - d * 1.0 * atr
-    tp = entry + d * 2.0 * atr
-    _web_alert("ENTRY", f"London breakout {dr} · Asia range {lo:.1f}–{hi:.1f} · "
-                        f"retest {level:.1f}")
-    if not _event_blackout():
-        icon = "🟢" if dr == "LONG" else "🔴"
-        _notify(f"{icon} LONDON BREAKOUT {dr} SIGNAL\n\n"
-                f"📊 Timeframe: 15M\n"
-                f"💰 Symbol: XAUUSD\n"
-                f"📍 Setup: Asia Range Breakout\n\n"
-                f"🎯 Entry: {entry:,.2f}\n"
-                f"🛑 SL: {sl:,.2f}\n"
-                f"🎯 TP: {tp:,.2f}\n\n"
-                f"📐 Asia range: {lo:,.1f} – {hi:,.1f}\n"
-                f"⭐ SNR Rating: BREAKOUT")
-
-
+# ------------------------------------------------------------------ alerts
 _zw_mem = {"t": 0.0, "keys": []}
 
 
@@ -1375,10 +1278,6 @@ def _background_loop():
             pass
         try:
             fundamental_watch()
-        except Exception:  # noqa: BLE001
-            pass
-        try:
-            _asia_bo_watch()
         except Exception:  # noqa: BLE001
             pass
         try:

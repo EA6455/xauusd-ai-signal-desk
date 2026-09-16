@@ -944,10 +944,14 @@ def fundamental_watch():
                         f"💰 XAUUSD — expect volatility")
     except Exception:  # noqa: BLE001
         pass
-    # ---- news forwarding (WatcherGuru, filtered for gold) ----
+    # ---- news forwarding (gold-relevant, WatcherGuru + Google News) ----
     try:
         seen = STATE.get("newsSeen") or {"lastTs": 0, "lastFwd": 0.0, "keys": []}
-        items = fundamentals.watcher_headlines()
+        items = list(fundamentals.watcher_headlines() or [])
+        try:
+            items += [(ts, ttl) for ts, ttl, _s in fundamentals.google_news(limit=12)]
+        except Exception:  # noqa: BLE001
+            pass
         if not items:
             return
         newest = max(ts for ts, _t in items)
@@ -960,20 +964,28 @@ def fundamental_watch():
             STATE["newsSeen"] = dict(seen, lastTs=newest)
             _save_state()
             return
+
+        def _similar(a, b):
+            """Same story from a different outlet? (word overlap)"""
+            wa = {w for w in a.lower().split() if len(w) > 3}
+            wb = {w for w in b.lower().split() if len(w) > 3}
+            return bool(wa and wb) and len(wa & wb) / len(wa | wb) > 0.5
+
+        keys = seen.get("keys") or []
         for ts, txt in sorted(items, key=lambda x: -x[0]):
             if ts <= seen["lastTs"] or now - ts > 45 * 60:
                 continue                      # old news
-            if txt in (seen.get("keys") or []):
-                continue                      # already forwarded
+            if any(txt == k or _similar(txt, k) for k in keys):
+                continue                      # already forwarded / same story
             if fundamentals.gold_relevant(txt):
-                keys = (seen.get("keys") or [])[-30:] + [txt]
+                keys = keys[-30:] + [txt]
                 STATE["newsSeen"] = dict(lastTs=newest, lastFwd=now, keys=keys)
                 _save_state()
-                _web_alert("NEWS", f"WatcherGuru · {txt[:140]}")
-                _notify(f"📰 GOLD-RELEVANT NEWS · WatcherGuru\n\n{txt[:400]}")
+                _web_alert("NEWS", txt[:140])
+                _notify(f"📰 GOLD-RELEVANT NEWS\n\n{txt[:400]}")
                 break
         else:
-            STATE["newsSeen"] = dict(seen, lastTs=newest)
+            STATE["newsSeen"] = dict(lastTs=newest)
             _save_state()
     except Exception:  # noqa: BLE001
         pass

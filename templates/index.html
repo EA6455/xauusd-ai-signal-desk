@@ -46,6 +46,25 @@
   .chartwrap{flex:1; position:relative; min-height:0; margin-top:6px}
   #ohlc{display:flex; gap:12px; flex-wrap:wrap; font-size:11.5px; color:var(--muted);
     padding:6px 2px 0; border-top:1px solid var(--border)}
+
+  /* chart settings (candle colors) */
+  .chartcard .card-head{position:relative}
+  #cfgPop{display:none; position:absolute; right:0; top:calc(100% + 8px); z-index:40;
+    background:#0d1320; border:1px solid var(--border); border-radius:12px;
+    box-shadow:0 14px 40px #000000a6; padding:12px 14px; width:228px}
+  #cfgPop.open{display:block}
+  .cfg-title{font-size:10.5px; font-weight:800; letter-spacing:1.2px; color:var(--muted);
+    text-transform:uppercase; margin-bottom:8px}
+  .cfg-presets{display:flex; gap:8px; margin-bottom:10px}
+  .cfg-sw{width:34px; height:34px; border-radius:9px; border:2px solid transparent;
+    cursor:pointer; overflow:hidden; display:flex; flex-direction:column; padding:0}
+  .cfg-sw.on{border-color:var(--gold)}
+  .cfg-sw i{display:block; flex:1}
+  .cfg-row{display:flex; align-items:center; justify-content:space-between;
+    font-size:12.5px; color:var(--text); padding:4px 0}
+  .cfg-row input[type=color]{width:44px; height:26px; border:1px solid var(--border);
+    border-radius:7px; background:var(--card2); padding:2px; cursor:pointer}
+  .cfg-note{font-size:10.5px; color:var(--muted); margin-top:8px}
   .col{display:flex; flex-direction:column; gap:16px; min-width:0}
   .card{background:linear-gradient(180deg,#131b2d 0%,#0f1523 100%); border:1px solid var(--border);
     border-radius:16px; padding:16px 18px; box-shadow:0 1px 0 #ffffff08 inset, 0 10px 28px #00000042;
@@ -268,6 +287,19 @@
             <span class="tsep"></span>
             <button data-tf="1d">1D</button><button data-tf="1w">1W</button><button data-tf="1M">1M</button><button data-tf="1Y">1Y</button>
           </div>
+          <button id="chartCfg" title="Chart settings — candle colors" style="flex:none; padding:6px 10px">⚙</button>
+          <div id="cfgPop">
+            <div class="cfg-title">Candle colors</div>
+            <div class="cfg-presets">
+              <button class="cfg-sw" data-bull="#22c55e" data-bear="#ef4444" title="Classic green / red"><i style="background:#22c55e"></i><i style="background:#ef4444"></i></button>
+              <button class="cfg-sw" data-bull="#26a69a" data-bear="#ef5350" title="TradingView teal / red"><i style="background:#26a69a"></i><i style="background:#ef5350"></i></button>
+              <button class="cfg-sw" data-bull="#0ecb81" data-bear="#f6465d" title="Exchange green / red"><i style="background:#0ecb81"></i><i style="background:#f6465d"></i></button>
+              <button class="cfg-sw" data-bull="#eab54f" data-bear="#60a5fa" title="Gold / blue"><i style="background:#eab54f"></i><i style="background:#60a5fa"></i></button>
+            </div>
+            <div class="cfg-row"><span>Bull ▲</span><input type="color" id="bullCol"></div>
+            <div class="cfg-row"><span>Bear ▼</span><input type="color" id="bearCol"></div>
+            <div class="cfg-note">✓ auto-saved — your colors, timeframe and layout come back on every visit</div>
+          </div>
         </div>
         <div class="price-row">
           <div class="big mono" id="price">—</div>
@@ -292,8 +324,8 @@
           <div id="ohlc" class="mono"></div>
         </div>
         <div class="legend">
-          <span><i style="background:#22c55e"></i>Bull</span>
-          <span><i style="background:#ef4444"></i>Bear</span>
+          <span><i id="legBull" style="background:#22c55e"></i>Bull</span>
+          <span><i id="legBear" style="background:#ef4444"></i>Bear</span>
           <span><i style="background:#60a5fa"></i>EMA 9</span>
           <span><i style="background:#a78bfa"></i>EMA 21</span>
           <span>▲▼ AI flips</span>
@@ -426,8 +458,43 @@ const INITIAL = {{ payload|tojson }};
   }));
 
   const state = { tf: '60m', data: null, lastAlertId: 0, sound: false, ready: false,
-                  hover: null, dispPrice: null, refPrice: null, lastTickT: 0,
+                  hover: null, hoverY: null, dispPrice: null, refPrice: null, lastTickT: 0,
                   clockSkew: 0, entry: null, entryStats: null };
+
+  // ---------- chart preferences (auto-saved layout) ----------
+  const DEFAULT_PREFS = {bull: '#22c55e', bear: '#ef4444'};
+  function loadPrefs(){
+    try{ return Object.assign({}, DEFAULT_PREFS, JSON.parse(localStorage.getItem('chartPrefs') || '{}')); }
+    catch(e){ return Object.assign({}, DEFAULT_PREFS); }
+  }
+  state.prefs = loadPrefs();
+  const hexToRgba = (hex, a) => {
+    const m = /^#?([0-9a-f]{6})$/i.exec(hex || '');
+    if(!m) return 'rgba(148,163,184,' + a + ')';
+    const x = parseInt(m[1], 16);
+    return 'rgba(' + ((x >> 16) & 255) + ',' + ((x >> 8) & 255) + ',' + (x & 255) + ',' + a + ')';
+  };
+  function applyPrefs(){
+    $('legBull').style.background = state.prefs.bull;
+    $('legBear').style.background = state.prefs.bear;
+    $('bullCol').value = state.prefs.bull;
+    $('bearCol').value = state.prefs.bear;
+    document.querySelectorAll('.cfg-sw').forEach(b =>
+      b.classList.toggle('on', b.dataset.bull === state.prefs.bull && b.dataset.bear === state.prefs.bear));
+    drawChart();
+  }
+  function savePrefs(p){
+    state.prefs = Object.assign({}, state.prefs, p);
+    localStorage.setItem('chartPrefs', JSON.stringify(state.prefs));   // auto-save
+    applyPrefs();
+  }
+  $('chartCfg').addEventListener('click', e => { e.stopPropagation(); $('cfgPop').classList.toggle('open'); });
+  $('cfgPop').addEventListener('click', e => e.stopPropagation());
+  document.addEventListener('click', () => $('cfgPop').classList.remove('open'));
+  document.querySelectorAll('.cfg-sw').forEach(b => b.addEventListener('click', () =>
+    savePrefs({bull: b.dataset.bull, bear: b.dataset.bear})));
+  $('bullCol').addEventListener('input', e => savePrefs({bull: e.target.value}));
+  $('bearCol').addEventListener('input', e => savePrefs({bear: e.target.value}));
   let audioCtx = null, pollTimer = null, entryTimer = null;
   const TF_SEC = {'1s':1, '5s':5, '15s':15, '30s':30, '1m':60, '5m':300, '15m':900,
     '30m':1800, '60m':3600, '2h':7200, '4h':14400, '1d':86400, '1w':604800,
@@ -1101,7 +1168,7 @@ const INITIAL = {{ payload|tojson }};
     const bw = Math.max(1.5, Math.min(16, spacing * 0.68));
     for(let k = 0; k < n; k++){
       const cc = cs[k], x = X(k);
-      const col = cc.c >= cc.o ? '#22c55e' : '#ef4444';
+      const col = cc.c >= cc.o ? state.prefs.bull : state.prefs.bear;
       g.strokeStyle = col; g.lineWidth = 1;
       g.beginPath(); g.moveTo(x, Y(cc.h)); g.lineTo(x, Y(cc.l)); g.stroke();
       const yTop = Y(Math.max(cc.o, cc.c));
@@ -1181,10 +1248,11 @@ const INITIAL = {{ payload|tojson }};
     // last price line & tag (colored by direction, TV-style)
     const lastC = cs[n - 1], up = lastC.c >= lastC.o;
     const ly = Y(lastC.c);
-    g.setLineDash([4, 4]); g.strokeStyle = up ? 'rgba(38,211,111,0.55)' : 'rgba(245,73,61,0.55)';
+    g.setLineDash([4, 4]);
+    g.strokeStyle = hexToRgba(up ? state.prefs.bull : state.prefs.bear, 0.55);
     g.beginPath(); g.moveTo(padL, ly); g.lineTo(W - padR + 4, ly); g.stroke();
     g.setLineDash([]);
-    g.fillStyle = up ? '#1a9e56' : '#c93830';
+    g.fillStyle = up ? state.prefs.bull : state.prefs.bear;
     g.fillRect(W - padR + 4, ly - 9, 74, 18);
     g.fillStyle = '#ffffff'; g.font = 'bold 10.5px ui-monospace,Menlo,monospace';
     g.textAlign = 'left'; g.textBaseline = 'middle';
@@ -1198,9 +1266,9 @@ const INITIAL = {{ payload|tojson }};
       '<span>O <b class="mono">' + fmtP(hc.o) + '</b></span>' +
       '<span>H <b class="mono">' + fmtP(hc.h) + '</b></span>' +
       '<span>L <b class="mono">' + fmtP(hc.l) + '</b></span>' +
-      '<span>C <b class="mono" style="color:' + (hup ? 'var(--green)' : 'var(--red)') + '">' +
+      '<span>C <b class="mono" style="color:' + (hup ? state.prefs.bull : state.prefs.bear) + '">' +
       fmtP(hc.c) + '</b></span>' +
-      '<span style="color:' + (hup ? 'var(--green)' : 'var(--red)') + '">' +
+      '<span style="color:' + (hup ? state.prefs.bull : state.prefs.bear) + '">' +
       (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%</span>';
 
     // crosshair + tooltip
@@ -1249,7 +1317,8 @@ const INITIAL = {{ payload|tojson }};
     document.querySelectorAll('.tabs button').forEach(x => x.classList.remove('on'));
     b.classList.add('on');
     state.tf = b.dataset.tf;
-    state.hover = null;
+    state.hover = null; state.hoverY = null;
+    localStorage.setItem('lastTf', state.tf);          // auto-save layout
     load(false);
   }));
 
@@ -1370,6 +1439,16 @@ const INITIAL = {{ payload|tojson }};
   } else {
     load(false);
   }
+  // restore the visitor's last timeframe (auto-saved layout)
+  const savedTf = localStorage.getItem('lastTf');
+  if(savedTf && savedTf !== state.tf &&
+     document.querySelector('.tabs button[data-tf="' + savedTf + '"]')){
+    state.tf = savedTf;
+    document.querySelectorAll('.tabs button').forEach(x =>
+      x.classList.toggle('on', x.dataset.tf === savedTf));
+    load(false);
+  }
+  applyPrefs();
   if(!state.entry) loadEntry();
   clearTimeout(pollTimer);
   pollTimer = setTimeout(() => load(false), 8000);

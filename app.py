@@ -457,6 +457,45 @@ def maybe_zone_watch(ent):
             f"💰 XAUUSD · 15M")
 
 
+_armed_mem = {"t": 0.0, "keys": []}
+
+
+def maybe_armed_alert(ent):
+    """🎯 Zone armed: a fresh SNR zone has 6/8+ confluence in place but price
+    has NOT returned yet (the missing check is the first retest). Phone
+    heads-up so the zone can be watched / a price alert placed there — this
+    is NOT an entry signal; the entry card follows if the retest confirms.
+    One alert per zone, 60-min global gap. Deliberately fires during event
+    windows too (a zone arming is a standing fact, not an entry)."""
+    if not ent or not ent.get("zoneKey") or not ent.get("zoneSide"):
+        return
+    if ent.get("touching") or ent.get("active"):
+        return                                  # retest cards already cover it
+    if ent.get("grade") in ("A+", "B+", "C+"):
+        return
+    if ent.get("passed", 0) < 6:
+        return                                  # only C+/B+ quality zones arm
+    key = "armed:" + ent["zoneKey"]
+    now = time.time()
+    if key in _armed_mem["keys"] or now - _armed_mem["t"] < 60 * 60:
+        return
+    _armed_mem["keys"] = (_armed_mem["keys"] + [key])[-60:]
+    _armed_mem["t"] = now
+    side = ent["zoneSide"]
+    lbl = "Support" if side == "demand" else "Resistance"
+    lo, hi = ent["entryZone"][0], ent["entryZone"][1]
+    quality = "B+" if ent["passed"] >= 7 else "C+"
+    _web_alert("ARMED", f"🎯 zone armed · {side} {lo:,.1f}–{hi:,.1f} · "
+                        f"{ent['passed']}/8 · waiting for retest")
+    _notify(f"🎯 ZONE ARMED — XAUUSD\n\n"
+            f"📍 Fresh {lbl} zone ({ent['direction']} bias)\n"
+            f"📐 Zone: {lo:,.1f} – {hi:,.1f}\n"
+            f"🧩 {ent['passed']}/8 confluence in place ({quality} quality if it holds)\n"
+            f"⏳ Waiting for price to return\n\n"
+            f"⚠️ Not an entry yet — signal card follows when price retests the zone\n\n"
+            f"💰 XAUUSD · 15M")
+
+
 def maybe_setup_alert(ent):
     """Fire an alert on SNR retests, once per ZONE+GRADE (a setup that stays
     live for hours must not re-alert every 15 minutes). All grades go to the
@@ -1095,6 +1134,7 @@ def build_payload(tf, d, symbol="XAUUSD"):
             except Exception:  # noqa: BLE001
                 payload["sweep"] = None
                 payload["sweepStats"] = None
+            maybe_armed_alert(ent)       # arming heads-up: even during events
             blk = _event_blackout()
             if blk:
                 _postpone_note(ent, blk)

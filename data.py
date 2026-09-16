@@ -63,6 +63,23 @@ def note_yahoo_result(ok):
             _yahoo_health["fails"] = 0
 
 YAHOO_SYMBOLS = ["GC=F"]           # COMEX gold front-month futures
+
+# Tradeable symbols: gold keeps its realtime machinery; the rest are served
+# from Yahoo FX/commodity charts with the same caching + fallback discipline.
+SYMBOLS = {
+    "XAUUSD": dict(name="Gold", yahoo=["GC=F"], dec=2, okx=True),
+    "XAGUSD": dict(name="Silver", yahoo=["XAGUSD=X", "SI=F"], dec=3),
+    "EURUSD": dict(name="Euro / US Dollar", yahoo=["EURUSD=X"], dec=5),
+    "GBPUSD": dict(name="British Pound / US Dollar", yahoo=["GBPUSD=X"], dec=5),
+    "USDJPY": dict(name="US Dollar / Japanese Yen", yahoo=["USDJPY=X"], dec=3),
+    "USDCHF": dict(name="US Dollar / Swiss Franc", yahoo=["USDCHF=X"], dec=5),
+    "AUDUSD": dict(name="Australian Dollar / US Dollar", yahoo=["AUDUSD=X"], dec=5),
+    "USDCAD": dict(name="US Dollar / Canadian Dollar", yahoo=["USDCAD=X"], dec=5),
+    "NZDUSD": dict(name="New Zealand Dollar / US Dollar", yahoo=["NZDUSD=X"], dec=5),
+    "EURJPY": dict(name="Euro / Japanese Yen", yahoo=["EURJPY=X"], dec=3),
+    "GBPJPY": dict(name="British Pound / Japanese Yen", yahoo=["GBPJPY=X"], dec=3),
+    "EURGBP": dict(name="Euro / British Pound", yahoo=["EURGBP=X"], dec=5),
+}
 OKX_INSTRUMENT = "PAXG-USDT"
 UA = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -111,7 +128,7 @@ def fetch_yahoo(symbol, interval, rng):
                                 c=float(c)))
             if len(out) > 60:
                 note_yahoo_result(True)
-                return out, f"Gold futures {symbol} · Yahoo Finance (COMEX)"
+                return out, f"{symbol} · Yahoo Finance"
         except Exception as e:  # noqa: BLE001
             last_err = e
     note_yahoo_result(False)
@@ -168,9 +185,39 @@ def get_spot(max_age=60):
     return _spot_mem["spot"]
 
 
+_quote_mem = {}
+
+
+def get_quote(symbol, max_age=8):
+    """Latest traded price for a non-gold symbol (Yahoo chart meta).
+    Returns (price, epoch) or None. Cached a few seconds per symbol."""
+    if symbol not in SYMBOLS or symbol == "XAUUSD":
+        return None
+    now = time.time()
+    st = _quote_mem.get(symbol)
+    if st and now - st["t"] < max_age:
+        return st["q"]
+    q = None
+    for ysym in SYMBOLS[symbol]["yahoo"]:
+        try:
+            j = _http_json(f"https://query1.finance.yahoo.com/v8/finance/chart/"
+                           f"{urllib.parse.quote(ysym)}?interval=1m&range=1d")
+            m = j["chart"]["result"][0]["meta"]
+            p = float(m["regularMarketPrice"])
+            q = (p, int(m.get("regularMarketTime") or now))
+            break
+        except Exception:  # noqa: BLE001
+            continue
+    if q is None and st:
+        q = st["q"]
+    _quote_mem[symbol] = dict(t=now, q=q)
+    return q
+
+
 # ----------------------------------------------------------------- cache
-def _cache_path(tf):
-    return os.path.join(CACHE_DIR, f"{tf}.json")
+def _cache_path(tf, symbol="XAUUSD"):
+    fn = f"{tf}.json" if symbol == "XAUUSD" else f"{symbol}_{tf}.json"
+    return os.path.join(CACHE_DIR, fn)
 
 
 _bg_lock = threading.Lock()
@@ -254,20 +301,21 @@ def _tick_candles(tf, cfg, force=False):
                 error="tick history warming up — try again in a minute")
 
 
-def _agg_candles(tf, cfg, force=False):
+def _agg_candles(tf, cfg, force=False, symbol="XAUUSD"):
     """Coarser timeframe aggregated from a finer CACHED timeframe."""
     now = time.time()
-    st = _mem.get(tf)
+    key = (symbol, tf)
+    st = _mem.get(key)
     if not force and st and now - st["fetchedAt"] < cfg["ttl"]:
         return dict(st, changed=False)
-    base = get_candles(cfg["base"])
+    base = get_candles(cfg["base"], symbol=symbol)
     src = base.get("candles")
     if src:
         candles = _bucket(src, cfg["bar_s"], cfg["keep"])
         st = dict(candles=candles,
                   source=(base.get("source") or "?") + f" · aggregated to {tf}",
                   stale=bool(base.get("stale")), fetchedAt=now, ttl=cfg["ttl"])
-        _mem[tf] = st
+        _mem[key] = st
         return dict(st, changed=True)
     if st:
         return dict(st, changed=False)
@@ -275,7 +323,7 @@ def _agg_candles(tf, cfg, force=False):
                 error=base.get("error") or "base timeframe unavailable")
 
 
-def get_candles(tf, force=False):
+def get_candles(tf, force=False, symbol="XAUUSD"):
     """Return dict(candles, source, stale, fetchedAt, changed[, error]).
 
     `changed=True` means a fresh network fetch produced new candles (or a
@@ -283,12 +331,19 @@ def get_candles(tf, force=False):
     """
     if tf not in TFS:
         raise ValueError(f"unknown timeframe {tf}")
+    if symbol not in SYMBOLS:
+        raise ValueError(f"unknown symbol {symbol}")
+    sym = SYMBOLS[symbol]
     cfg = TFS[tf]
     if cfg.get("src") == "ticks":
+        if symbol != "XAUUSD":
+            return dict(candles=None, source=None, stale=True, fetchedAt=time.time(),
+                        changed=True, error="second charts are gold-only")
         return _tick_candles(tf, cfg, force)
     if cfg.get("src") == "agg":
-        return _agg_candles(tf, cfg, force)
-    st = _mem.get(tf)
+        return _agg_candles(tf, cfg, force, symbol)
+    key = (symbol, tf)
+    st = _mem.get(key)
     now = time.time()
     if not force and st and now - st["fetchedAt"] < cfg["ttl"]:
         return dict(st, changed=False)
@@ -298,15 +353,15 @@ def get_candles(tf, force=False):
     # slow upstream (Yahoo can take 1-3s). One refresh per tf at a time.
     if not force and st and now - st["fetchedAt"] < cfg["ttl"] * 5:
         with _bg_lock:
-            if tf not in _bg_refreshing:
-                _bg_refreshing.add(tf)
+            if key not in _bg_refreshing:
+                _bg_refreshing.add(key)
 
-                def _bg(t=tf):
+                def _bg(t=tf, s=symbol):
                     try:
-                        get_candles(t, force=True)
+                        get_candles(t, force=True, symbol=s)
                     finally:
                         with _bg_lock:
-                            _bg_refreshing.discard(t)
+                            _bg_refreshing.discard((s, t))
 
                 threading.Thread(target=_bg, daemon=True).start()
         return dict(st, changed=False)
@@ -314,13 +369,13 @@ def get_candles(tf, force=False):
     candles = None
     source = None
     err = None
-    for sym in YAHOO_SYMBOLS:
+    for ysym in sym["yahoo"]:
         try:
-            candles, source = fetch_yahoo(sym, cfg["interval"], cfg["range"])
+            candles, source = fetch_yahoo(ysym, cfg["interval"], cfg["range"])
             break
         except Exception as e:  # noqa: BLE001
             err = e
-    if candles is None:
+    if candles is None and sym.get("okx"):
         try:
             candles, source = fetch_okx(cfg["okx_bar"], target=1600)
         except Exception as e:  # noqa: BLE001
@@ -330,9 +385,9 @@ def get_candles(tf, force=False):
         candles = candles[-cfg["keep"]:]
         st = dict(candles=candles, source=source, stale=False,
                   fetchedAt=now, ttl=cfg["ttl"])
-        _mem[tf] = st
+        _mem[key] = st
         try:
-            with open(_cache_path(tf), "w") as f:
+            with open(_cache_path(tf, symbol), "w") as f:
                 json.dump(dict(candles=candles, source=source, fetchedAt=now), f)
         except OSError:
             pass
@@ -341,7 +396,7 @@ def get_candles(tf, force=False):
     # network failure → serve the disk cache, marked stale
     disk = None
     try:
-        with open(_cache_path(tf)) as f:
+        with open(_cache_path(tf, symbol)) as f:
             disk = json.load(f)
     except Exception:  # noqa: BLE001
         pass
@@ -349,7 +404,7 @@ def get_candles(tf, force=False):
         st = dict(candles=disk["candles"],
                   source=disk.get("source", "?") + " · cached",
                   stale=True, fetchedAt=now, ttl=20)
-        _mem[tf] = st
+        _mem[key] = st
         return dict(st, changed=True)
     return dict(candles=None, source=None, stale=True, fetchedAt=now,
                 changed=True, error=str(err) or "no data source available")

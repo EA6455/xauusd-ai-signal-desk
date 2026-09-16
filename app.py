@@ -849,11 +849,13 @@ def tick_spot(max_age=0.8, broker=True):
     return p, src
 
 
-def build_payload(tf, d):
+def build_payload(tf, d, symbol="XAUUSD"):
     raw = d["candles"]
+    gold = symbol == "XAUUSD"
+    sym_cfg = data.SYMBOLS[symbol]
 
     # ---- spot-align: remove the futures basis so prices match XAU/USD spot
-    spot_price, spot_src = spot_reference()
+    spot_price, spot_src = (spot_reference() if gold else (None, None))
     adjust = 0.0
     if spot_price:
         adjust = raw[-1]["c"] - spot_price
@@ -879,7 +881,7 @@ def build_payload(tf, d):
     # last close — so /api/data never lags /api/tick and the UI's periodic
     # reload can't drag the displayed price backwards.
     try:
-        _tp, _tsrc = tick_spot(broker=False)
+        _tp, _tsrc = (tick_spot(broker=False) if gold else (None, None))
         if _tp and candles:
             _lc = candles[-1]
             _lc["c"] = float(_tp)
@@ -890,8 +892,11 @@ def build_payload(tf, d):
     except Exception:  # noqa: BLE001
         pass
 
-    ensure_model(tf, candles)
-    model = models[tf]
+    if gold:
+        ensure_model(tf, candles)
+        model = models[tf]
+    else:
+        model = ml.Model()
 
     X, idxs, p = ml.build_features(candles)
     c = p["c"]
@@ -974,6 +979,7 @@ def build_payload(tf, d):
 
     payload = dict(
         tf=tf,
+        sym=symbol, symName=sym_cfg["name"], dec=sym_cfg.get("dec", 2),
         version=app_version(),
         source=source, stale=bool(d.get("stale")),
         fetchedAt=int(d["fetchedAt"]), serverNow=int(time.time()),
@@ -1003,7 +1009,7 @@ def build_payload(tf, d):
         payload["fundamentals"] = fundamentals.snapshot()
     except Exception:  # noqa: BLE001
         payload["fundamentals"] = None
-    if tf == "15m":
+    if tf == "15m" and gold:
         try:
             d1h = data.get_candles("60m")
             ent = entries.evaluate(candles, d1h.get("candles"))
@@ -1075,15 +1081,28 @@ class TFState:
         self.lock = threading.Lock()
 
 
-tf_states = {tf: TFState() for tf in data.TFS}
+tf_states = {}
 
 
-def refresh(tf, force=False, allow_build=True):
+def _st(symbol, tf):
+    """Per-(symbol, timeframe) build state, created on demand."""
+    key = (symbol, tf)
+    if key not in tf_states:
+        tf_states[key] = TFState()
+    return tf_states[key]
+
+
+_panel_views = {}          # (symbol, tf) -> last time a visitor requested it
+
+
+def refresh(tf, force=False, allow_build=True, symbol="XAUUSD"):
     if tf not in data.TFS:
         return dict(error=f"unknown timeframe {tf}")
-    st = tf_states[tf]
+    if symbol not in data.SYMBOLS:
+        return dict(error=f"unknown symbol {symbol}")
+    st = _st(symbol, tf)
     with st.lock:
-        d = data.get_candles(tf, force=force)
+        d = data.get_candles(tf, force=force, symbol=symbol)
         if not d.get("candles"):
             if st.payload is not None:
                 st.payload["stale"] = True
@@ -1103,14 +1122,15 @@ def refresh(tf, force=False, allow_build=True):
     if need and not building and allow_build:
         st.building = True
         try:
-            payload = build_payload(tf, d)
+            payload = build_payload(tf, d, symbol)
             with st.lock:
                 st.lastFetch = d.get("fetchedAt")
                 st.lastBar = last_bar
                 st.builtAt = time.time()
                 prev_price = STATE.get("lastPrice")
                 st.payload = payload
-                check_price_alerts(prev_price, payload["price"])
+                if symbol == "XAUUSD":
+                    check_price_alerts(prev_price, payload["price"])
                 with STATE_LOCK:
                     STATE["lastPrice"] = payload["price"]
                     _save_state()
@@ -1255,6 +1275,19 @@ def _background_loop():
             except Exception:  # noqa: BLE001
                 pass
             time.sleep(1)
+        # keep forex pairs a visitor is actually watching warm (10 min)
+        now2 = time.time()
+        stale_views = [k for k, ts in _panel_views.items() if now2 - ts > 600]
+        for k in stale_views:
+            _panel_views.pop(k, None)
+        for (sym, tf) in list(_panel_views):
+            if sym == "XAUUSD":
+                continue
+            try:
+                refresh(tf, symbol=sym)
+            except Exception:  # noqa: BLE001
+                pass
+            time.sleep(0.4)
         try:
             update_trade_tracker()
         except Exception:  # noqa: BLE001
@@ -1514,11 +1547,15 @@ def api_data():
     tf = request.args.get("tf", "60m")
     if tf not in data.TFS:
         return jsonify(error=f"unknown timeframe {tf}"), 400
+    symbol = request.args.get("symbol", "XAUUSD")
+    if symbol not in data.SYMBOLS:
+        return jsonify(error=f"unknown symbol {symbol}"), 400
     force = request.args.get("force") == "1"
     start_background()
+    _panel_views[(symbol, tf)] = time.time()
     # user requests never trigger heavy builds — the background loop owns
     # them; users always get the cached payload with fresh STATE attached
-    return jsonify(refresh(tf, force=force, allow_build=False))
+    return jsonify(refresh(tf, force=force, allow_build=False, symbol=symbol))
 
 
 @app.route("/api/price-alerts", methods=["POST"])
@@ -1548,6 +1585,20 @@ def del_price_alert(pid):
 
 @app.route("/api/tick")
 def api_tick():
+    symbol = request.args.get("symbol", "XAUUSD")
+    if symbol not in data.SYMBOLS:
+        return jsonify(error=f"unknown symbol {symbol}"), 400
+    if symbol != "XAUUSD":
+        q = data.get_quote(symbol)
+        if not q:
+            return jsonify(price=None, serverNow=int(time.time()),
+                           source="unavailable", sym=symbol)
+        p, ts = q
+        age = time.time() - ts
+        dec = data.SYMBOLS[symbol].get("dec", 2)
+        return jsonify(price=round(p, dec), serverNow=int(time.time()),
+                       source=("market closed" if age > 3600 else "live quote"),
+                       sym=symbol)
     price, src = tick_spot()
     return jsonify(price=round(price, 2) if price else None,
                    source=src, serverNow=int(time.time()),

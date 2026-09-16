@@ -21,6 +21,7 @@ import ai_desk
 import data
 import entries
 import fundamentals
+import llm_desk
 import ml
 import narrative
 import wsfeed
@@ -66,7 +67,8 @@ def app_version():
 STATE_LOCK = threading.Lock()
 STATE = dict(alerts=[], priceAlerts=[], lastSig={}, lastPrice=None,
              liveTrade=None, tradeHistory=[], lastSigT={}, lastSetup=None,
-             lastSetupT=0.0, eventAlerted=[], newsSeen=None, brokerOffset=0.0)
+             lastSetupT=0.0, eventAlerted=[], newsSeen=None, brokerOffset=0.0,
+             llmBriefDay="")
 try:
     with open(STATE_PATH) as f:
         _loaded = json.load(f)
@@ -1020,6 +1022,10 @@ def _background_loop():
             fundamental_watch()
         except Exception:  # noqa: BLE001
             pass
+        try:
+            _llm_cycle()
+        except Exception:  # noqa: BLE001
+            pass
         time.sleep(6)
 
 
@@ -1086,6 +1092,7 @@ def get_ai_desk(force=False):
         except Exception:  # noqa: BLE001
             pass
         desk = ai_desk.build(c15, c60, c1d, ent, sig, fund)
+        desk["llm"] = llm_desk.snapshot()
         _desk_cache.update(t=now, desk=desk)
         return desk
     except Exception:  # noqa: BLE001
@@ -1137,6 +1144,91 @@ def get_note(force=False):
         import traceback
         traceback.print_exc()
         return _note_cache["note"]
+
+
+def _llm_context():
+    """Market snapshot text the external AI models read."""
+    bits = []
+    try:
+        p, _src = tick_spot(broker=False)
+        if p:
+            bits.append(f"Spot XAU/USD now: {p:,.2f}")
+    except Exception:  # noqa: BLE001
+        pass
+    d = _desk_cache.get("desk") or {}
+    if d:
+        c = d.get("consensus", {})
+        bits.append(f"Local 8-model consensus: {c.get('label')} "
+                    f"(score {c.get('score')}, {c.get('bull')} bullish / "
+                    f"{c.get('bear')} bearish / {c.get('neutral')} neutral)")
+        for a in d.get("analysts", []):
+            bits.append(f"- {a['name']}: {a['verdict']} (conf {a['conf']}) — {a['note']}")
+    try:
+        f = fundamentals.snapshot() or {}
+        m = f.get("macro") or {}
+        if m.get("dxy"):
+            bits.append(f"DXY {m['dxy'].get('chgPct', 0):+.2f}% today")
+        if m.get("us10y"):
+            bits.append(f"US 10Y yield {m['us10y'].get('chgPct', 0):+.2f}% today")
+        nx = f.get("nextHigh") or {}
+        if nx.get("title"):
+            bits.append(f"Next high-impact USD event: {nx['title']}")
+    except Exception:  # noqa: BLE001
+        pass
+    return "XAUUSD market snapshot:\n" + "\n".join(bits)
+
+
+def _daily_brief():
+    """One morning Telegram card: local desk consensus + external AI reads."""
+    d = _desk_cache.get("desk") or {}
+    if not d:
+        return
+    c = d.get("consensus", {})
+    lines = ["🌅 AI DAILY BRIEF — XAUUSD", ""]
+    try:
+        p, _ = tick_spot(broker=False)
+        if p:
+            lines.append(f"⚡ Price: {p:,.2f}")
+    except Exception:  # noqa: BLE001
+        pass
+    lines.append(f"🧠 Local desk (8 models): {c.get('label')} — "
+                 f"{c.get('bull')}B / {c.get('bear')}S / {c.get('neutral')}N")
+    for a in [x for x in d.get("analysts", []) if x["verdict"] != "neutral"][:2]:
+        lines.append(f"   {a['icon']} {a['name']}: {a['note']}")
+    try:
+        for s in llm_desk.snapshot().get("seats", []):
+            lines.append(f"{s['icon']} {s['name']}: {s['verdict']} — {s['note']}")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        m = (fundamentals.snapshot() or {}).get("macro") or {}
+        if m.get("dxy") or m.get("us10y"):
+            lines.append(f"🌍 DXY {m.get('dxy', {}).get('chgPct', 0):+.2f}% · "
+                         f"US10Y {m.get('us10y', {}).get('chgPct', 0):+.2f}%")
+    except Exception:  # noqa: BLE001
+        pass
+    lines += ["", "⚠ Analysis only — not financial advice"]
+    _notify("\n".join(lines))
+
+
+def _llm_cycle():
+    """Called every background loop: refresh external AI seats (24/7, own
+    15-min cadence, non-blocking) and send the one daily morning brief."""
+    if llm_desk.configured() and llm_desk.due():
+        try:
+            txt = _llm_context()
+            threading.Thread(target=llm_desk.refresh, args=(txt,),
+                             daemon=True).start()
+        except Exception:  # noqa: BLE001
+            pass
+    g = time.gmtime()
+    day = time.strftime("%Y-%m-%d", g)
+    if g.tm_hour >= 6 and STATE.get("llmBriefDay") != day:
+        with STATE_LOCK:
+            if STATE.get("llmBriefDay") != day:
+                STATE["llmBriefDay"] = day
+                _save_state()
+        _daily_brief()
 
 
 # ------------------------------------------------------------------ flask

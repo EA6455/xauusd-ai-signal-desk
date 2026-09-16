@@ -134,6 +134,12 @@
   .ai-badge.neut{background:#1a2130; color:#94a3b8}
   .ai-conf{height:3px; border-radius:2px; background:#1a2130; margin-top:5px}
   .ai-conf i{display:block; height:3px; border-radius:2px; background:var(--blue)}
+  .ai-sec{display:flex; align-items:center; gap:8px; margin:14px 0 4px;
+    font-size:10.5px; font-weight:800; letter-spacing:1.2px; color:var(--muted);
+    text-transform:uppercase}
+  .ai-sec:after{content:''; flex:1; height:1px; background:var(--border)}
+  .ai-hint{font-size:11px; color:var(--muted); line-height:1.55; margin-top:10px}
+  .ai-hint code{color:var(--blue); font-size:10.5px}
   .rc{display:flex; gap:8px; margin-top:10px; align-items:center}
   .rc input{width:100%; background:var(--card2); border:1px solid var(--border); color:var(--text); border-radius:8px; padding:7px 9px; font-size:13px; outline:none}
   .rc input:focus{border-color:var(--gold)}
@@ -342,7 +348,9 @@
     <ul style="margin-top:6px">
       <li><b>AI Analyst Desk</b> — eight independent models read the same chart (neural ML,
       momentum, market structure, SNR zones, mean reversion, volatility &amp; range, live
-      order flow, macro) and vote; the consensus meter aggregates them, confidence-weighted.</li>
+      order flow, macro) and vote; the consensus meter aggregates them, confidence-weighted.
+      External LLM analysts (GPT · Claude · Gemini · Groq) take extra seats automatically
+      when their API keys are configured — plus one 🌅 AI daily brief on Telegram.</li>
       <li><b>SNR Entry (15m)</b> — graded setups: <b style="color:var(--green)">A+</b> (8/8,
       tracked + phone), <b style="color:var(--amber)">B+</b> (7/8, phone with warning),
       <b style="color:#7c8aa0">C+</b> (6/8, web only). Malaysian-style Supply &amp; Demand: market structure
@@ -544,7 +552,7 @@ const INITIAL = {{ payload|tojson }};
     $('consCounts').textContent = (c.bull||0) + ' bullish · ' + (c.bear||0) + ' bearish · ' + (c.neutral||0) + ' neutral';
     const sc = Math.max(-1, Math.min(1, c.score || 0));
     $('consNeedle').style.left = ((sc + 1) / 2 * 100) + '%';
-    body.innerHTML = d.analysts.map(a => {
+    const row = a => {
       const v = a.verdict === 'bullish' ? 'bull' : a.verdict === 'bearish' ? 'bear' : 'neut';
       const t = (a.note || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
       return '<div class="ai-row" title="' + t + '">'
@@ -554,8 +562,22 @@ const INITIAL = {{ payload|tojson }};
         + '<div class="ai-right"><span class="ai-badge ' + v + '">' + a.verdict + '</span>'
         + '<div class="ai-conf"><i style="width:' + Math.round((a.conf || 0) * 100) + '%"></i></div>'
         + '</div></div>';
-    }).join('');
-    if(c.asOf) $('deskTime').textContent = '8 models · updated ' + new Date(c.asOf * 1000)
+    };
+    let h = d.analysts.map(row).join('');
+    const llm = d.llm;
+    if(llm && llm.seats && llm.seats.length){
+      h += '<div class="ai-sec">☁ external ai</div>';
+      h += llm.seats.map(s => row(Object.assign({}, s, {name: s.name}))).join('');
+    }
+    body.innerHTML = h;
+    if(llm && llm.n === 0){
+      body.innerHTML += '<div class="ai-hint">Want real LLM analysts here (GPT · Claude · '
+        + 'Gemini · Groq)? Add <code>OPENAI_API_KEY</code>, <code>ANTHROPIC_API_KEY</code>, '
+        + '<code>GEMINI_API_KEY</code> or <code>GROQ_API_KEY</code> in Render → Environment '
+        + '— that seat activates on the next deploy.</div>';
+    }
+    const total = 8 + (llm && llm.seats ? llm.seats.length : 0);
+    if(c.asOf) $('deskTime').textContent = total + ' models · updated ' + new Date(c.asOf * 1000)
       .toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit'});
   }
 

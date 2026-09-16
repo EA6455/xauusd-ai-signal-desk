@@ -40,7 +40,12 @@
   #errBanner{display:none; align-items:center; gap:8px; background:#2a2110; color:#fbbf24;
     border:1px solid #4a3a12; border-radius:10px; padding:10px 14px; margin-bottom:14px; font-size:13.5px}
 
-  .grid{display:grid; grid-template-columns:minmax(0,1fr) 372px; gap:16px}
+  .grid{display:grid; grid-template-columns:minmax(0,1fr) 372px; gap:16px; align-items:start}
+  .chartcard{position:sticky; top:14px; height:calc(100vh - 28px); min-height:560px;
+    display:flex; flex-direction: column}
+  .chartwrap{flex:1; position:relative; min-height:0; margin-top:6px}
+  #ohlc{display:flex; gap:12px; flex-wrap:wrap; font-size:11.5px; color:var(--muted);
+    padding:6px 2px 0; border-top:1px solid var(--border)}
   .col{display:flex; flex-direction:column; gap:16px; min-width:0}
   .card{background:linear-gradient(180deg,#131b2d 0%,#0f1523 100%); border:1px solid var(--border);
     border-radius:16px; padding:16px 18px; box-shadow:0 1px 0 #ffffff08 inset, 0 10px 28px #00000042;
@@ -89,7 +94,7 @@
   .src.stale{color:var(--amber)}
 
   .chart-wrap{position:relative}
-  canvas#chart{display:block; width:100%; height:340px}
+  canvas#chart{display:block; width:100%; height:100%; cursor:crosshair}
   #tip{display:none; position:absolute; background:#0d1320f2; border:1px solid var(--border);
     border-radius:9px; padding:8px 11px; font-size:12px; line-height:1.55; pointer-events:none; z-index:5; white-space:nowrap}
   .legend{display:flex; gap:14px; margin-top:6px; font-size:11.5px; color:var(--muted); flex-wrap:wrap}
@@ -230,7 +235,8 @@
   .toast.out{opacity:0}
   @keyframes tin{from{transform:translateX(30px); opacity:0} to{transform:none; opacity:1}}
 
-  @media (max-width:980px){ .grid{grid-template-columns:1fr} .signal{font-size:42px} }
+  @media (max-width:980px){ .grid{grid-template-columns:1fr} .signal{font-size:42px}
+    .chartcard{position:static; height:64vh; min-height:420px} }
 </style>
 </head>
 <body>
@@ -252,7 +258,7 @@
   <div class="grid">
     <!-- ================= left: chart ================= -->
     <div class="col">
-      <div class="card">
+      <div class="card chartcard">
         <div class="card-head">
           <h2>Price &amp; Signals</h2>
           <div class="tabs tfbar">
@@ -279,8 +285,11 @@
           <button id="syncClear" title="Remove the offset">Reset</button>
         </div>
         <div class="chart-wrap">
-          <canvas id="chart"></canvas>
-          <div id="tip" class="mono"></div>
+          <div class="chartwrap">
+            <canvas id="chart"></canvas>
+            <div id="tip" class="mono"></div>
+          </div>
+          <div id="ohlc" class="mono"></div>
         </div>
         <div class="legend">
           <span><i style="background:#22c55e"></i>Bull</span>
@@ -294,15 +303,6 @@
         <div id="hitline"></div>
       </div>
 
-      <div class="card alerts-card">
-        <div class="card-head"><h2>Alert Feed</h2><span class="muted small" id="alertsCount"></span></div>
-        <div id="alerts"></div>
-      </div>
-
-      <div class="card" id="fnCard">
-        <div class="card-head"><h2>Fundamentals &amp; News</h2><span class="muted small" id="fnNext"></span></div>
-        <div id="fnBody"><div class="muted small">loading macro &amp; news…</div></div>
-      </div>
     </div>
 
     <!-- ================= right column ================= -->
@@ -359,6 +359,16 @@
           <button id="paAdd">Add</button>
         </div>
         <div id="paList" class="small"></div>
+      </div>
+
+      <div class="card alerts-card">
+        <div class="card-head"><h2>Alert Feed</h2><span class="muted small" id="alertsCount"></span></div>
+        <div id="alerts"></div>
+      </div>
+
+      <div class="card" id="fnCard">
+        <div class="card-head"><h2>Fundamentals &amp; News</h2><span class="muted small" id="fnNext"></span></div>
+        <div id="fnBody"><div class="muted small">loading macro &amp; news…</div></div>
       </div>
     </div>
   </div>
@@ -1036,7 +1046,7 @@ const INITIAL = {{ payload|tojson }};
     if(!d || !d.candles || d.candles.length < 2) return;
     const cv = $('chart'), wrap = cv.parentElement;
     const dpr = window.devicePixelRatio || 1;
-    const W = wrap.clientWidth, H = 340;
+    const W = wrap.clientWidth, H = Math.max(300, wrap.clientHeight);
     if(cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)){
       cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
     }
@@ -1044,34 +1054,51 @@ const INITIAL = {{ payload|tojson }};
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.clearRect(0, 0, W, H);
 
-    const cs = d.candles, n = cs.length;
-    const padL = 8, padR = 76, padT = 14, padB = 26;
+    const padL = 10, padR = 80, padT = 12, padB = 24;
     const iw = W - padL - padR, ih = H - padT - padB;
+
+    // visible slice — cap bar count by width so candles stay readable
+    const maxBars = Math.max(60, Math.floor(iw / 5));
+    const off = Math.max(0, d.candles.length - maxBars);
+    const cs = d.candles.slice(off);
+    const n = cs.length;
+
     let lo = Infinity, hi = -Infinity;
     for(let k = 0; k < n; k++){ if(cs[k].l < lo) lo = cs[k].l; if(cs[k].h > hi) hi = cs[k].h; }
-    const span = (hi - lo) || 1; lo -= span * 0.05; hi += span * 0.05;
-    const X = k => padL + iw * (n === 1 ? 0 : k / (n - 1));
+    const span0 = (hi - lo) || 1; lo -= span0 * 0.06; hi += span0 * 0.06;
+    const spacing = Math.min(iw / (n + 3), 24);
+    const X = k => padL + spacing * (k + 0.5);
     const Y = p => padT + ih * (1 - (p - lo) / (hi - lo));
 
+    // grid + right price scale (nice round steps, TradingView-style)
+    const niceStep = span => {
+      const raw = span / 6, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+      const nm = raw / mag;
+      return (nm < 1.5 ? 1 : nm < 3.5 ? 2 : nm < 7.5 ? 5 : 10) * mag;
+    };
     g.font = '10.5px ui-monospace,SFMono-Regular,Menlo,monospace';
-    g.textBaseline = 'middle'; g.textAlign = 'left';
-    for(let q = 0; q <= 4; q++){
-      const pv = lo + (hi - lo) * q / 4, yy = Y(pv);
+    g.textBaseline = 'middle';
+    const step = niceStep(hi - lo);
+    for(let p = Math.ceil(lo / step) * step; p <= hi; p += step){
+      const yy = Y(p);
       g.strokeStyle = 'rgba(148,163,184,0.10)';
       g.beginPath(); g.moveTo(padL, yy); g.lineTo(W - padR + 4, yy); g.stroke();
-      g.fillStyle = '#7c8699';
-      g.fillText(fmtP(pv), W - padR + 9, yy);
+      g.fillStyle = '#7c8699'; g.textAlign = 'left';
+      g.fillText(fmtP(p), W - padR + 9, yy);
     }
     g.textAlign = 'center'; g.textBaseline = 'alphabetic';
-    for(let q = 0; q <= 5; q++){
-      const k = Math.max(0, Math.min(n - 1, Math.round((n - 1) * q / 5)));
+    const nlab = Math.max(2, Math.floor(iw / 95));
+    for(let q = 0; q <= nlab; q++){
+      const k = Math.max(0, Math.min(n - 1, Math.round((n - 1) * q / nlab)));
+      const xx = X(k);
+      g.strokeStyle = 'rgba(148,163,184,0.06)';
+      g.beginPath(); g.moveTo(xx, padT); g.lineTo(xx, H - padB); g.stroke();
       g.fillStyle = '#7c8699';
-      g.fillText(fmtT(cs[k].t, true), X(k), H - 8);
+      g.fillText(fmtT(cs[k].t, true), xx, H - 8);
     }
 
-    // candlesticks
-    const spacing = (n > 1) ? iw / (n - 1) : 8;
-    const bw = Math.max(1, Math.min(8, spacing * 0.62));
+    // candlesticks — fat, readable, capped width
+    const bw = Math.max(1.5, Math.min(16, spacing * 0.68));
     for(let k = 0; k < n; k++){
       const cc = cs[k], x = X(k);
       const col = cc.c >= cc.o ? '#22c55e' : '#ef4444';
@@ -1087,7 +1114,7 @@ const INITIAL = {{ payload|tojson }};
       g.strokeStyle = col; g.lineWidth = w; g.beginPath();
       let started = false;
       for(let k = 0; k < n; k++){
-        const v = arr[k]; if(v == null) continue;
+        const v = arr[k + off]; if(v == null) continue;
         const x = X(k), y = Y(v);
         if(!started){ g.moveTo(x, y); started = true; } else g.lineTo(x, y);
       }
@@ -1100,8 +1127,8 @@ const INITIAL = {{ payload|tojson }};
     if(d.setups){
       g.font = 'bold 9px ui-monospace,Menlo,monospace';
       for(const m of d.setups){
-        if(m.k < 0 || m.k >= n) continue;
-        const x = X(m.k), y = Y(m.p);
+        const kk = m.k - off; if(kk < 0 || kk >= n) continue;
+        const x = X(kk), y = Y(m.p);
         const col = m.outcome === 'win' ? '#26d36f' : m.outcome === 'loss' ? '#f5493d' : '#94a3b8';
         g.fillStyle = col;
         g.beginPath();
@@ -1114,8 +1141,8 @@ const INITIAL = {{ payload|tojson }};
     // AI flip markers
     g.font = 'bold 9px ui-monospace,Menlo,monospace';
     for(const m of d.markers){
-      if(m.k < 0 || m.k >= n) continue;
-      const x = X(m.k), y = Y(m.p);
+      const kk = m.k - off; if(kk < 0 || kk >= n) continue;
+      const x = X(kk), y = Y(m.p);
       const buy = m.type === 'BUY';
       g.fillStyle = buy ? 'rgba(34,197,94,0.85)' : 'rgba(239,68,68,0.85)';
       g.beginPath();
@@ -1151,33 +1178,67 @@ const INITIAL = {{ payload|tojson }};
       drawLvl(e15.tp2, '#1aa85a', 'TP2 ' + e15.tp2.toFixed(1));
     }
 
-    // last price line & tag
-    const lp = cs[n - 1].c, ly = Y(lp);
-    g.setLineDash([4, 4]); g.strokeStyle = 'rgba(232,182,76,0.55)';
+    // last price line & tag (colored by direction, TV-style)
+    const lastC = cs[n - 1], up = lastC.c >= lastC.o;
+    const ly = Y(lastC.c);
+    g.setLineDash([4, 4]); g.strokeStyle = up ? 'rgba(38,211,111,0.55)' : 'rgba(245,73,61,0.55)';
     g.beginPath(); g.moveTo(padL, ly); g.lineTo(W - padR + 4, ly); g.stroke();
     g.setLineDash([]);
-    g.fillStyle = '#e8b64c'; g.fillRect(W - padR + 4, ly - 9, 72, 18);
-    g.fillStyle = '#10141d'; g.font = 'bold 10.5px ui-monospace,Menlo,monospace';
+    g.fillStyle = up ? '#1a9e56' : '#c93830';
+    g.fillRect(W - padR + 4, ly - 9, 74, 18);
+    g.fillStyle = '#ffffff'; g.font = 'bold 10.5px ui-monospace,Menlo,monospace';
     g.textAlign = 'left'; g.textBaseline = 'middle';
-    g.fillText(fmtP(lp), W - padR + 8, ly);
+    g.fillText(fmtP(lastC.c), W - padR + 8, ly);
 
-    // hover crosshair + tooltip
+    // OHLC legend (hovered bar, else the latest)
+    const hovK = (state.hover != null && state.hover >= 0 && state.hover < n) ? state.hover : n - 1;
+    const hc = cs[hovK], hup = hc.c >= hc.o;
+    const pct = ((hc.c - hc.o) / hc.o * 100);
+    $('ohlc').innerHTML = '<span>' + d.tf.toUpperCase() + '</span>' +
+      '<span>O <b class="mono">' + fmtP(hc.o) + '</b></span>' +
+      '<span>H <b class="mono">' + fmtP(hc.h) + '</b></span>' +
+      '<span>L <b class="mono">' + fmtP(hc.l) + '</b></span>' +
+      '<span>C <b class="mono" style="color:' + (hup ? 'var(--green)' : 'var(--red)') + '">' +
+      fmtP(hc.c) + '</b></span>' +
+      '<span style="color:' + (hup ? 'var(--green)' : 'var(--red)') + '">' +
+      (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%</span>';
+
+    // crosshair + tooltip
     if(state.hover != null){
       const k = Math.max(0, Math.min(n - 1, state.hover));
       const x = X(k), cc = cs[k];
       g.setLineDash([3, 3]); g.strokeStyle = 'rgba(226,232,240,0.35)';
       g.beginPath(); g.moveTo(x, padT); g.lineTo(x, H - padB); g.stroke();
-      g.beginPath(); g.moveTo(padL, Y(cc.c)); g.lineTo(W - padR + 4, Y(cc.c)); g.stroke();
+      let hy = null;
+      if(state.hoverY != null && state.hoverY >= padT && state.hoverY <= padT + ih){
+        hy = state.hoverY;
+        g.beginPath(); g.moveTo(padL, hy); g.lineTo(W - padR + 4, hy); g.stroke();
+      }
       g.setLineDash([]);
+      // axis tags
+      if(hy != null){
+        const hp = lo + (1 - (hy - padT) / ih) * (hi - lo);
+        g.fillStyle = '#2a3650'; g.fillRect(W - padR + 4, hy - 9, 74, 18);
+        g.fillStyle = '#e9edf5'; g.font = 'bold 10.5px ui-monospace,Menlo,monospace';
+        g.textAlign = 'left'; g.textBaseline = 'middle';
+        g.fillText(fmtP(hp), W - padR + 8, hy);
+      }
+      const tl = fmtT(cc.t, true);
+      g.font = 'bold 10px ui-monospace,Menlo,monospace';
+      const tw = g.measureText(tl).width + 12;
+      g.fillStyle = '#2a3650'; g.fillRect(x - tw / 2, H - padB, tw, 16);
+      g.fillStyle = '#e9edf5'; g.textAlign = 'center';
+      g.fillText(tl, x, H - padB + 8);
       g.fillStyle = '#f8fafc'; g.beginPath(); g.arc(x, Y(cc.c), 3, 0, Math.PI * 2); g.fill();
-      const sc = (d.scores && d.scores[k] != null)
-        ? ((d.scores[k] >= 0 ? '+' : '') + d.scores[k].toFixed(2)) : '—';
+      const sc = (d.scores && d.scores[k + off] != null)
+        ? ((d.scores[k + off] >= 0 ? '+' : '') + d.scores[k + off].toFixed(2)) : '—';
       const tip = $('tip');
       tip.innerHTML = '<b>' + fmtDT(cc.t) + '</b><br>O ' + fmtP(cc.o) + ' · H ' + fmtP(cc.h) +
         ' · L ' + fmtP(cc.l) + '<br>C <b>' + fmtP(cc.c) + '</b> · score ' + sc;
       tip.style.display = 'block';
       tip.style.left = Math.min(W - tip.offsetWidth - 8, Math.max(6, x + 12)) + 'px';
-      tip.style.top = '10px';
+      tip.style.top = Math.min(H - tip.offsetHeight - 8,
+        Math.max(8, (state.hoverY != null ? state.hoverY : padT + 20) - 10)) + 'px';
     } else {
       $('tip').style.display = 'none';
     }
@@ -1196,12 +1257,16 @@ const INITIAL = {{ payload|tojson }};
     const d = state.data;
     if(!d || !d.candles || d.candles.length < 2) return;
     const r = e.target.getBoundingClientRect();
-    const padL = 8, padR = 76, iw = r.width - padL - padR, n = d.candles.length;
-    state.hover = Math.max(0, Math.min(n - 1,
-      Math.round((e.clientX - r.left - padL) / iw * (n - 1))));
+    const padL = 10, padR = 80, iw = r.width - padL - padR;
+    const maxBars = Math.max(60, Math.floor(iw / 5));
+    const n = Math.min(d.candles.length, maxBars);
+    const spacing = Math.min(iw / (n + 3), 24);
+    const k = Math.floor((e.clientX - r.left - padL) / spacing);
+    state.hover = (k >= 0 && k < n) ? k : null;
+    state.hoverY = e.clientY - r.top;
     drawChart();
   });
-  $('chart').addEventListener('mouseleave', () => { state.hover = null; drawChart(); });
+  $('chart').addEventListener('mouseleave', () => { state.hover = null; state.hoverY = null; drawChart(); });
   window.addEventListener('resize', drawChart);
 
   state.sound = localStorage.getItem('sound') === '1';

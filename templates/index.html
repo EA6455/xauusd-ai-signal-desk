@@ -112,7 +112,10 @@
 
   .tabs{display:flex; gap:4px; background:var(--card2); border:1px solid var(--border); border-radius:10px; padding:3px}
   .tfbar{overflow-x:auto; max-width:100%; scrollbar-width:thin}
-  .tfbar button{padding:6px 8px; font-size:11.5px; flex:none}
+  .tfbar button{padding:5px 9px; font-size:11.5px; flex:none; border-radius:8px;
+    border:1px solid transparent; background:transparent; color:var(--muted)}
+  .tfbar button:hover{color:var(--text)}
+  .tfbar button.on{background:#1c2740; color:var(--gold); border-color:#2a3752}
   .tsep{width:1px; background:var(--border); margin:4px 2px; flex:none}
   .radar{margin-top:12px; border-top:1px solid var(--border); padding-top:10px}
   .radar-h{font-size:10.5px; font-weight:800; letter-spacing:1.2px; color:var(--muted);
@@ -1771,6 +1774,17 @@ const INITIAL = {{ payload|tojson }};
   });
 
   // ---------- chart ----------
+  function rr(g, x, y, w, h, r){
+    r = Math.min(r, w / 2, h / 2);
+    g.beginPath();
+    g.moveTo(x + r, y);
+    g.arcTo(x + w, y, x + w, y + h, r);
+    g.arcTo(x + w, y + h, x, y + h, r);
+    g.arcTo(x, y + h, x, y, r);
+    g.arcTo(x, y, x + w, y, r);
+    g.closePath();
+  }
+
   function drawChart(p){
     const d = p.data;
     if(!d || !d.candles || d.candles.length < 2) return;
@@ -1809,29 +1823,78 @@ const INITIAL = {{ payload|tojson }};
       const nm = raw / mag;
       return (nm < 1.5 ? 1 : nm < 3.5 ? 2 : nm < 7.5 ? 5 : 10) * mag;
     };
+    // axis gutters — darker strips behind the scales (trading-app look)
+    g.fillStyle = 'rgba(8,12,20,0.5)';
+    g.fillRect(W - padR + 4, 0, padR - 4, H);
+    g.fillRect(0, H - padB, W, padB);
+    g.strokeStyle = 'rgba(148,163,184,0.13)'; g.lineWidth = 1;
+    g.beginPath(); g.moveTo(W - padR + 4.5, 0); g.lineTo(W - padR + 4.5, H); g.stroke();
+    g.beginPath(); g.moveTo(0, H - padB + 0.5); g.lineTo(W, H - padB + 0.5); g.stroke();
+
+    // watermark — symbol · timeframe
+    g.font = '800 42px Inter,system-ui,-apple-system,sans-serif';
+    g.fillStyle = 'rgba(148,163,184,0.06)'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText((d.sym || 'XAUUSD') + ' · ' + p.tf.toUpperCase(), padL + iw / 2, padT + ih / 2);
+    g.textBaseline = 'alphabetic';
+
     g.font = '10.5px ui-monospace,SFMono-Regular,Menlo,monospace';
     g.textBaseline = 'middle';
     const step = niceStep(hi - lo);
+    g.setLineDash([2, 4]);
     for(let pv = Math.ceil(lo / step) * step; pv <= hi; pv += step){
       const yy = Y(pv);
-      g.strokeStyle = 'rgba(148,163,184,0.10)';
+      g.strokeStyle = 'rgba(148,163,184,0.07)';
       g.beginPath(); g.moveTo(padL, yy); g.lineTo(W - padR + 4, yy); g.stroke();
-      g.fillStyle = '#7c8699'; g.textAlign = 'left';
+      g.fillStyle = '#71809a'; g.textAlign = 'left';
       g.fillText(fmtPD(p, pv), W - padR + 9, yy);
     }
+    g.setLineDash([]);
     g.textAlign = 'center'; g.textBaseline = 'alphabetic';
+
+    // day separators + time labels (dates replace nearby time labels)
+    const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const dayX = [];
+    for(let k = 1; k < n; k++){
+      const d0 = new Date(cs[k - 1].t * 1000), d1 = new Date(cs[k].t * 1000);
+      if(d0.getUTCDate() !== d1.getUTCDate()) dayX.push(X(k));
+    }
+    for(const dx of dayX){
+      g.strokeStyle = 'rgba(148,163,184,0.15)';
+      g.beginPath(); g.moveTo(dx, padT); g.lineTo(dx, H - padB); g.stroke();
+    }
     const nlab = Math.max(2, Math.floor(iw / 95));
     for(let q = 0; q <= nlab; q++){
       const k = Math.max(0, Math.min(n - 1, Math.round((n - 1) * q / nlab)));
       const xx = X(k);
-      g.strokeStyle = 'rgba(148,163,184,0.06)';
-      g.beginPath(); g.moveTo(xx, padT); g.lineTo(xx, H - padB); g.stroke();
-      g.fillStyle = '#7c8699';
+      if(dayX.some(dx => Math.abs(dx - xx) < 46)) continue;
+      g.fillStyle = '#71809a';
       g.fillText(fmtT(cs[k].t, true), xx, H - 8);
     }
+    g.font = 'bold 10px ui-monospace,Menlo,monospace'; g.fillStyle = '#9aa6bb';
+    dayX.forEach(dx => {
+      const k = Math.max(0, Math.min(n - 1, Math.round((dx - padL) / spacing - 0.5)));
+      const dd = new Date(cs[k].t * 1000);
+      g.fillText(MONTHS[dd.getUTCMonth()] + ' ' + dd.getUTCDate(), dx, H - 8);
+    });
 
     // candlesticks — fat, readable, capped width
     const bw = Math.max(1.5, Math.min(16, spacing * 0.68));
+
+    // volume histogram (behind price, bottom 14% of the pane)
+    if(cs[n - 1].v != null){
+      let vmax = 0;
+      for(let k = 0; k < n; k++) if(cs[k].v > vmax) vmax = cs[k].v;
+      if(vmax > 0){
+        const vh = ih * 0.14;
+        for(let k = 0; k < n; k++){
+          const cc = cs[k], x = X(k);
+          g.fillStyle = cc.c >= cc.o ? 'rgba(34,197,94,0.16)' : 'rgba(239,68,68,0.16)';
+          const hh2 = Math.max(1, (cc.v / vmax) * vh);
+          g.fillRect(x - bw / 2, H - padB - hh2, Math.max(1.5, bw), hh2);
+        }
+      }
+    }
+
     for(let k = 0; k < n; k++){
       const cc = cs[k], x = X(k);
       const col = cc.c >= cc.o ? state.prefs.bull : state.prefs.bear;
@@ -1919,10 +1982,25 @@ const INITIAL = {{ payload|tojson }};
     g.beginPath(); g.moveTo(padL, ly); g.lineTo(W - padR + 4, ly); g.stroke();
     g.setLineDash([]);
     g.fillStyle = up ? state.prefs.bull : state.prefs.bear;
-    g.fillRect(W - padR + 4, ly - 9, 74, 18);
+    rr(g, W - padR + 6, ly - 10, padR - 12, 20, 5); g.fill();
     g.fillStyle = '#ffffff'; g.font = 'bold 10.5px ui-monospace,Menlo,monospace';
-    g.textAlign = 'left'; g.textBaseline = 'middle';
-    g.fillText(fmtPD(p, lastC.c), W - padR + 8, ly);
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(fmtPD(p, lastC.c), W - padR + 6 + (padR - 12) / 2, ly);
+    // countdown to bar close
+    const left = Math.max(0, lastC.t + (TF_SEC[p.tf] || 900) - Date.now() / 1000);
+    if(left > 0 && (TF_SEC[p.tf] || 0) <= 86400){
+      const hh = Math.floor(left / 3600), mm = Math.floor(left % 3600 / 60), ss = Math.floor(left % 60);
+      const cd = hh > 0 ? hh + ':' + String(mm).padStart(2, '0')
+                        : String(mm).padStart(2, '0') + ':' + String(ss).padStart(2, '0');
+      g.fillStyle = 'rgba(13,18,32,0.92)';
+      rr(g, W - padR + 6, ly + 12, padR - 12, 15, 4); g.fill();
+      g.strokeStyle = 'rgba(148,163,184,0.25)';
+      rr(g, W - padR + 6, ly + 12, padR - 12, 15, 4); g.stroke();
+      g.fillStyle = up ? hexToRgba(state.prefs.bull, 0.95) : hexToRgba(state.prefs.bear, 0.95);
+      g.font = '600 9.5px ui-monospace,Menlo,monospace';
+      g.fillText(cd, W - padR + 6 + (padR - 12) / 2, ly + 20);
+    }
+    g.textBaseline = 'alphabetic';
 
     renderDrawings(p, g);
 
@@ -1954,17 +2032,21 @@ const INITIAL = {{ payload|tojson }};
       // axis tags
       if(hy != null){
         const hp = lo + (1 - (hy - padT) / ih) * (hi - lo);
-        g.fillStyle = '#2a3650'; g.fillRect(W - padR + 4, hy - 9, 74, 18);
+        g.fillStyle = '#1b2438'; g.strokeStyle = 'rgba(148,163,184,0.4)'; g.lineWidth = 1;
+        rr(g, W - padR + 6, hy - 10, padR - 12, 20, 5); g.fill(); g.stroke();
         g.fillStyle = '#e9edf5'; g.font = 'bold 10.5px ui-monospace,Menlo,monospace';
-        g.textAlign = 'left'; g.textBaseline = 'middle';
-        g.fillText(fmtPD(p, hp), W - padR + 8, hy);
+        g.textAlign = 'center'; g.textBaseline = 'middle';
+        g.fillText(fmtPD(p, hp), W - padR + 6 + (padR - 12) / 2, hy);
+        g.textBaseline = 'alphabetic';
       }
       const tl = fmtT(cc.t, true);
       g.font = 'bold 10px ui-monospace,Menlo,monospace';
-      const tw = g.measureText(tl).width + 12;
-      g.fillStyle = '#2a3650'; g.fillRect(x - tw / 2, H - padB, tw, 16);
-      g.fillStyle = '#e9edf5'; g.textAlign = 'center';
-      g.fillText(tl, x, H - padB + 8);
+      const tw = g.measureText(tl).width + 14;
+      g.fillStyle = '#1b2438'; g.strokeStyle = 'rgba(148,163,184,0.4)';
+      rr(g, x - tw / 2, H - padB + 2, tw, 16, 4); g.fill(); g.stroke();
+      g.fillStyle = '#e9edf5'; g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillText(tl, x, H - padB + 10);
+      g.textBaseline = 'alphabetic';
       g.fillStyle = '#f8fafc'; g.beginPath(); g.arc(x, Y(cc.c), 3, 0, Math.PI * 2); g.fill();
       const sc = (d.scores && d.scores[k + off] != null)
         ? ((d.scores[k + off] >= 0 ? '+' : '') + d.scores[k + off].toFixed(2)) : '—';
@@ -1982,6 +2064,7 @@ const INITIAL = {{ payload|tojson }};
 
   // ---------- events ----------
   window.addEventListener('resize', drawAll);
+  setInterval(() => { if(!document.hidden) drawAll(); }, 1000);   // live countdown pill
 
   state.sound = localStorage.getItem('sound') === '1';
   $('sndBtn').textContent = state.sound ? '🔊 Sound on' : '🔇 Sound off';

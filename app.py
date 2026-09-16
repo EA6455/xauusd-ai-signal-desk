@@ -1096,7 +1096,8 @@ def build_payload(tf, d, symbol="XAUUSD"):
             adjust = 0.0
     if adjust:
         candles = [dict(t=k["t"], o=k["o"] - adjust, h=k["h"] - adjust,
-                        l=k["l"] - adjust, c=k["c"] - adjust) for k in raw]
+                        l=k["l"] - adjust, c=k["c"] - adjust,
+                        v=k.get("v")) for k in raw]
         source = d["source"] + " · spot-aligned"
     else:
         candles = raw
@@ -1220,7 +1221,8 @@ def build_payload(tf, d, symbol="XAUUSD"):
         spot=dict(price=round(spot_price, 2), source=spot_src) if spot_price else None,
         basis=round(adjust, 2),
         candles=[dict(t=int(k["t"]), o=round(k["o"], 2), h=round(k["h"], 2),
-                      l=round(k["l"], 2), c=round(k["c"], 2)) for k in win],
+                      l=round(k["l"], 2), c=round(k["c"], 2),
+                      v=(round(k["v"], 1) if k.get("v") is not None else None)) for k in win],
         emas=dict(e9=[round(float(x), 2) for x in p["e9"][s0:]],
                   e21=[round(float(x), 2) for x in p["e21"][s0:]]),
         scores=[None if np.isnan(s) else round(float(s), 3) for s in scores[s0:]],

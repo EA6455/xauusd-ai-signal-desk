@@ -121,11 +121,13 @@ def fetch_yahoo(symbol, interval, rng):
                 if c is None:
                     continue
                 o, h, l = q["open"][k], q["high"][k], q["low"][k]
+                v = (q.get("volume") or [None] * len(ts))[k]
                 out.append(dict(t=int(ts[k]),
                                 o=float(o) if o else float(c),
                                 h=float(h) if h else float(c),
                                 l=float(l) if l else float(c),
-                                c=float(c)))
+                                c=float(c),
+                                v=float(v) if v else 0.0))
             if len(out) > 60:
                 note_yahoo_result(True)
                 return out, f"{symbol} · Yahoo Finance"
@@ -161,7 +163,7 @@ def fetch_okx(bar, target=1600):
     for r in rows:
         # [ts, open, high, low, close, vol, volCcy, volCcyQuote, confirm]
         out.append(dict(t=int(r[0]) // 1000, o=float(r[1]), h=float(r[2]),
-                        l=float(r[3]), c=float(r[4])))
+                        l=float(r[3]), c=float(r[4]), v=float(r[5] or 0)))
     out.sort(key=lambda k: k["t"])
     return out, f"PAXG-USDT (1 oz gold) · OKX"
 

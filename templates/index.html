@@ -1672,8 +1672,8 @@ const INITIAL = {{ payload|tojson }};
     g.font = '10.5px ui-monospace,SFMono-Regular,Menlo,monospace';
     g.textBaseline = 'middle';
     const step = niceStep(hi - lo);
-    for(let p = Math.ceil(lo / step) * step; p <= hi; p += step){
-      const yy = Y(p);
+    for(let pv = Math.ceil(lo / step) * step; pv <= hi; pv += step){
+      const yy = Y(pv);
       g.strokeStyle = 'rgba(148,163,184,0.10)';
       g.beginPath(); g.moveTo(padL, yy); g.lineTo(W - padR + 4, yy); g.stroke();
       g.fillStyle = '#7c8699'; g.textAlign = 'left';

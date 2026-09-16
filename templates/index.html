@@ -43,6 +43,10 @@
   .grid{display:grid; grid-template-columns:minmax(0,1fr) 372px; gap:16px; align-items:start}
   .chartcard{position:sticky; top:14px; height:calc(100vh - 28px); min-height:560px;
     display:flex; flex-direction: column}
+  .chartcard.full{position:fixed; inset:0; z-index:200; height:100vh; min-height:0;
+    border-radius:0; margin:0; box-shadow:none}
+  .chartcard .price-row{margin-bottom:6px}
+  .chartcard .chartwrap{margin-top:2px}
   .panels{display:grid; grid-template-columns:1fr; grid-template-rows:1fr;
     gap:12px; flex:1; min-height:0}
   .panels.dual{grid-template-columns:1fr 1fr; grid-template-rows:1fr}
@@ -315,6 +319,7 @@
             <div class="src" id="syncBadge" style="cursor:pointer; color:var(--gold)"
                  title="Auto-synced to the live market. Tap to optionally match your exact broker instead">⚡ auto · live market</div>
             <button id="dualBtn" title="Split screen — watch two markets side by side">⧉ Dual Screen</button>
+            <button id="fsBtn" title="Full-screen chart (Esc to exit)">⤢</button>
           </div>
         </div>
 
@@ -1610,8 +1615,19 @@ const INITIAL = {{ payload|tojson }};
     drawAll();
   }
   $('dualBtn').addEventListener('click', () => setDual(!state.panels._b));
+  function toggleFull(){
+    const c = document.querySelector('.chartcard');
+    c.classList.toggle('full');
+    $('fsBtn').classList.toggle('on', c.classList.contains('full'));
+    drawAll();
+  }
+  $('fsBtn').addEventListener('click', toggleFull);
   document.addEventListener('keydown', e => {
-    if(e.key === 'Escape'){ panelsAlive().forEach(p => p.pending = []); drawAll(); }
+    if(e.key === 'Escape'){
+      const c = document.querySelector('.chartcard');
+      if(c.classList.contains('full')){ toggleFull(); return; }
+      panelsAlive().forEach(p => p.pending = []); drawAll();
+    }
   });
 
   // ---------- chart ----------
@@ -1632,7 +1648,7 @@ const INITIAL = {{ payload|tojson }};
     const iw = W - padL - padR, ih = H - padT - padB;
 
     // visible slice — cap bar count by width so candles stay readable
-    const maxBars = Math.max(60, Math.floor(iw / 5));
+    const maxBars = Math.max(60, Math.floor(iw / 6));
     const off = Math.max(0, d.candles.length - maxBars);
     const cs = d.candles.slice(off);
     const n = cs.length;

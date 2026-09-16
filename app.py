@@ -77,7 +77,7 @@ STATE_LOCK = threading.Lock()
 STATE = dict(alerts=[], priceAlerts=[], lastSig={}, lastPrice=None,
              liveTrade=None, tradeHistory=[], lastSigT={}, lastSetup=None,
              lastSetupT=0.0, eventAlerted=[], newsSeen=None, brokerOffset=0.0,
-             llmBriefDay="", asiaBO=None)
+             asiaBO=None)
 try:
     with open(STATE_PATH) as f:
         _loaded = json.load(f)
@@ -1536,42 +1536,10 @@ def _llm_context():
     return "XAUUSD market snapshot:\n" + "\n".join(bits)
 
 
-def _daily_brief():
-    """One morning Telegram card: local desk consensus + external AI reads."""
-    d = _desk_cache.get("desk") or {}
-    if not d:
-        return
-    c = d.get("consensus", {})
-    lines = ["🌅 AI DAILY BRIEF — XAUUSD", ""]
-    try:
-        p, _ = tick_spot(broker=False)
-        if p:
-            lines.append(f"⚡ Price: {p:,.2f}")
-    except Exception:  # noqa: BLE001
-        pass
-    lines.append(f"🧠 Local desk (8 models): {c.get('label')} — "
-                 f"{c.get('bull')}B / {c.get('bear')}S / {c.get('neutral')}N")
-    for a in [x for x in d.get("analysts", []) if x["verdict"] != "neutral"][:2]:
-        lines.append(f"   {a['icon']} {a['name']}: {a['note']}")
-    try:
-        for s in llm_desk.snapshot().get("seats", []):
-            lines.append(f"{s['icon']} {s['name']}: {s['verdict']} — {s['note']}")
-    except Exception:  # noqa: BLE001
-        pass
-    try:
-        m = (fundamentals.snapshot() or {}).get("macro") or {}
-        if m.get("dxy") or m.get("us10y"):
-            lines.append(f"🌍 DXY {m.get('dxy', {}).get('chgPct', 0):+.2f}% · "
-                         f"US10Y {m.get('us10y', {}).get('chgPct', 0):+.2f}%")
-    except Exception:  # noqa: BLE001
-        pass
-    lines += ["", "⚠ Analysis only — not financial advice"]
-    _notify("\n".join(lines))
-
-
 def _llm_cycle():
     """Called every background loop: refresh external AI seats (24/7, own
-    15-min cadence, non-blocking) and send the one daily morning brief."""
+    15-min cadence, non-blocking). The daily Telegram brief was removed —
+    it re-sent after every Render restart (ephemeral disk) and spammed."""
     if llm_desk.configured() and llm_desk.due():
         try:
             txt = _llm_context()
@@ -1579,14 +1547,6 @@ def _llm_cycle():
                              daemon=True).start()
         except Exception:  # noqa: BLE001
             pass
-    g = time.gmtime()
-    day = time.strftime("%Y-%m-%d", g)
-    if g.tm_hour >= 6 and STATE.get("llmBriefDay") != day:
-        with STATE_LOCK:
-            if STATE.get("llmBriefDay") != day:
-                STATE["llmBriefDay"] = day
-                _save_state()
-        _daily_brief()
 
 
 # ------------------------------------------------------------------ flask

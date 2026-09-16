@@ -109,8 +109,9 @@ def _notify(text):
                 data=json.dumps({"chat_id": chat, "text": text}).encode(),
                 headers={"Content-Type": "application/json"})
             urllib.request.urlopen(req, timeout=10)
-        except Exception:  # noqa: BLE001
-            pass
+            print(f"[tg] sent to {chat}: {text[:50]!r}", flush=True)
+        except Exception as e:  # noqa: BLE001
+            print(f"[tg] FAILED to {chat}: {e}", flush=True)
 
 
 # ------------------------------------------------------------------ models

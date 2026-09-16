@@ -1274,7 +1274,7 @@ def _background_loop():
                 refresh(tf)
             except Exception:  # noqa: BLE001
                 pass
-            time.sleep(1)
+            time.sleep(0.25)
         # keep forex pairs a visitor is actually watching warm (10 min)
         now2 = time.time()
         stale_views = [k for k, ts in _panel_views.items() if now2 - ts > 600]
@@ -1554,8 +1554,11 @@ def api_data():
     start_background()
     _panel_views[(symbol, tf)] = time.time()
     # user requests never trigger heavy builds — the background loop owns
-    # them; users always get the cached payload with fresh STATE attached
-    return jsonify(refresh(tf, force=force, allow_build=False, symbol=symbol))
+    # them; users always get the cached payload with fresh STATE attached.
+    # Exception: a brand-new (symbol, tf) combo builds once so the first
+    # visitor isn't left waiting on the loop.
+    first_time = _st(symbol, tf).payload is None
+    return jsonify(refresh(tf, force=force, allow_build=first_time, symbol=symbol))
 
 
 @app.route("/api/price-alerts", methods=["POST"])

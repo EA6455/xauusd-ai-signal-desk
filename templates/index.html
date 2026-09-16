@@ -292,6 +292,13 @@
     .chartcard{position:static; height:86vh; min-height:420px}
     .panels.dual{grid-template-columns:1fr; grid-template-rows:1fr 1fr} }
 </style>
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#0b0f17">
+  <link rel="apple-touch-icon" href="/icons/icon-180.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="XAU Signals">
 </head>
 <body>
 
@@ -321,6 +328,7 @@
                  title="Auto-synced to the live market. Tap to optionally match your exact broker instead">⚡ auto · live market</div>
             <button id="dualBtn" title="Split screen — watch two markets side by side">⧉ Dual Screen</button>
             <button id="fsBtn" title="Full-screen chart (Esc to exit)">⤢</button>
+        <button id="installBtn" title="Full-screen chart (Esc to exit)">📲</button>
           </div>
         </div>
 
@@ -1585,6 +1593,33 @@ const INITIAL = {{ payload|tojson }};
       g.setLineDash([]);
     }
   }
+
+  // ---------- PWA install ----------
+  (function(){
+    let deferred = null;
+    const ib = $('installBtn');
+    if(!ib) return;
+    const standalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+    if(standalone){ ib.style.display = 'none'; return; }
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault(); deferred = e; ib.style.display = '';
+    });
+    ib.addEventListener('click', () => {
+      if(deferred){
+        deferred.prompt();
+        deferred.userChoice.finally(() => { deferred = null; ib.style.display = 'none'; });
+      } else {
+        const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+        toast(ios ? '📲 On iPhone: tap <b>Share</b> → <b>Add to Home Screen</b>'
+                  : '📲 Install from your browser menu: <b>Install app</b> / <b>Add to Home screen</b>');
+      }
+    });
+    // show the button after a moment when the browser offers no prompt (e.g. Safari)
+    setTimeout(() => { if(!deferred) ib.style.display = ''; }, 2500);
+    if('serviceWorker' in navigator){
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    }
+  })();
 
   // ---------- panel binding / symbol / dual screen ----------
   function setSym(p, sym){

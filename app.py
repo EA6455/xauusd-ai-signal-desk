@@ -16,7 +16,7 @@ import threading
 import time
 
 import numpy as np
-from flask import Flask, Response, jsonify, render_template, request
+from flask import Flask, Response, jsonify, render_template, request, send_from_directory
 
 import ai_desk
 import data
@@ -1947,6 +1947,30 @@ def api_broker_sync_clear():
         STATE["brokerOffset"] = 0.0
         _save_state()
     return jsonify(offset=0.0)
+
+
+STATIC_DIR = os.path.join(BASE, "static")
+
+
+@app.route("/manifest.json")
+def pwa_manifest():
+    return send_from_directory(STATIC_DIR, "manifest.json",
+                               mimetype="application/manifest+json",
+                               max_age=3600)
+
+
+@app.route("/sw.js")
+def pwa_sw():
+    resp = send_from_directory(STATIC_DIR, "sw.js",
+                               mimetype="text/javascript")
+    resp.headers["Cache-Control"] = "no-cache"   # SW updates must ship fresh
+    return resp
+
+
+@app.route("/icons/<path:name>")
+def pwa_icon(name):
+    return send_from_directory(os.path.join(STATIC_DIR, "icons"), name,
+                               mimetype="image/png", max_age=86400)
 
 
 @app.route("/api/health")

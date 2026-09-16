@@ -43,8 +43,9 @@
   .grid{display:grid; grid-template-columns:minmax(0,1fr) 372px; gap:16px; align-items:start}
   .chartcard{position:sticky; top:14px; height:calc(100vh - 28px); min-height:560px;
     display:flex; flex-direction: column}
-  .panels{display:grid; grid-template-columns:1fr; gap:12px; flex:1; min-height:0}
-  .panels.dual{grid-template-columns:1fr 1fr}
+  .panels{display:grid; grid-template-columns:1fr; grid-template-rows:1fr;
+    gap:12px; flex:1; min-height:0}
+  .panels.dual{grid-template-columns:1fr 1fr; grid-template-rows:1fr}
   .panel{display:flex; flex-direction:column; min-height:0; min-width:0}
   .panel-head{position:relative; display:flex; align-items:center; gap:8px; flex-wrap:wrap}
   .symSel{background:var(--card2); border:1px solid var(--border); color:var(--gold);
@@ -1207,7 +1208,7 @@ const INITIAL = {{ payload|tojson }};
 
     renderNote(); renderDesk(); renderTracker(); renderAlerts(); renderPa(); renderFundamentals(); renderRadar(); renderSweep();
     if(d.entry){ renderEntry(); }
-    drawChart();
+    drawChart(P0());
   }
 
   function renderAlerts(){
@@ -1591,6 +1592,7 @@ const INITIAL = {{ payload|tojson }};
       tmp.innerHTML = html;
       const b = tmp.firstElementChild;
       b.querySelectorAll('canvas').forEach(c => { c.width = 0; c.height = 0; });
+      b.querySelectorAll('.tools').forEach(x => x.remove());
       b.querySelectorAll('.cfgPop').forEach(x => x.classList.remove('open'));
       $('panels').appendChild(b);
       state.panels._b = { sfx: '_b', sym: localStorage.getItem('lastSym_B') || 'EURUSD',

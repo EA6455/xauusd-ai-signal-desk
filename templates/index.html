@@ -1097,8 +1097,13 @@ const INITIAL = {{ payload|tojson }};
     if((f.news || []).length){
       h += '<div class="fn-sec">📰 Gold-relevant headlines</div>';
       f.news.forEach(function(n){
+        const b = n[3];
+        const chip = b
+          ? '<span class="ibadge ' + (b === 'BULLISH' ? 'bull' : b === 'BEARISH' ? 'bear' : 'neutral') + '">' +
+            (b === 'BULLISH' ? '↑ BULL' : b === 'BEARISH' ? '↓ BEAR' : 'MIXED') + '</span>'
+          : '';
         h += '<div class="fn-row"><span class="al-time mono">' + fmtDT(n[0]) + '</span>' +
-             '<span class="fn-note">' + n[1] + '</span>' +
+             '<span class="fn-note">' + n[1] + '</span>' + chip +
              '<span class="small muted" style="margin-left:auto">' + n[2] + '</span></div>';
       });
     }

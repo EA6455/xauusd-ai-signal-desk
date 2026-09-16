@@ -1556,6 +1556,18 @@ def _web_alert(typ, msg, price=None):
     return a
 
 
+def _news_card(txt):
+    """📰 news alert with the gold read: which way this headline pushes
+    XAU/USD and why — deterministic rule engine, honest MIXED verdicts."""
+    b = fundamentals.gold_bias(txt)
+    ic = {"BULLISH": "🟢", "BEARISH": "🔴", "MIXED": "🟡"}[b["bias"]]
+    why = " · ".join(b["why"][:2])
+    return (f"📰 GOLD-RELEVANT NEWS\n\n{txt[:400]}\n\n"
+            f"🧭 Gold read: {ic} {b['bias']}\n"
+            f"Why: {why}\n\n"
+            f"⚠ Headline analysis — not a trade signal"), b["bias"]
+
+
 def fundamental_watch():
     """Fundamental alerts: a pre-alert shortly before high-impact USD events
     (CPI, FOMC, NFP...) and forwarding of gold-relevant breaking news from
@@ -1577,7 +1589,11 @@ def fundamental_watch():
                 _notify(f"📅 HIGH-IMPACT EVENT — {e['title']}\n\n"
                         f"⏰ Starts in ~{e['minutesTo']} min ({when} UTC)\n"
                         f"🌍 Currency: {e['country']}{fc}\n\n"
-                        f"💰 XAUUSD — expect volatility", cat="news")
+                        f"💰 XAUUSD — expect volatility\n\n"
+                        f"🧭 How gold usually reacts:\n"
+                        f"{fundamentals.event_playbook(e['title'])}\n\n"
+                        f"⚠ Event reaction guide — not a trade signal",
+                        cat="news")
     except Exception:  # noqa: BLE001
         pass
     # ---- news forwarding (gold-relevant, WatcherGuru + Google News) ----
@@ -1617,8 +1633,11 @@ def fundamental_watch():
                 keys = keys[-30:] + [txt]
                 STATE["newsSeen"] = dict(lastTs=newest, lastFwd=now, keys=keys)
                 _save_state()
-                _web_alert("NEWS", txt[:140])
-                _notify(f"📰 GOLD-RELEVANT NEWS\n\n{txt[:400]}", cat="news")
+                card, bias = _news_card(txt)
+                ic = {"BULLISH": "🟢", "BEARISH": "🔴",
+                      "MIXED": "🟡"}[bias]
+                _web_alert("NEWS", f"{ic} {txt[:110]} · {bias} for gold")
+                _notify(card, cat="news")
                 break
         else:
             STATE["newsSeen"] = dict(lastTs=newest)

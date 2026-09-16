@@ -216,13 +216,158 @@ def gold_relevant(text):
     return bool(_HOT_RE.search(t))
 
 
+# ---------------------------------------------------- headline direction
+# Desk-style read of a headline for XAU/USD. Gold trades off real yields,
+# the dollar and risk appetite: dovish Fed / weak data / falling yields /
+# weak dollar / geopolitical escalation = bullish; hawkish Fed / hot data /
+# rising yields / strong dollar / risk-on = bearish. Rules are weighted and
+# when both sides fire the read is honestly MIXED. Deterministic on purpose
+# — same headline, same verdict, no hallucination.
+
+_BULL_RULES = [
+    # lookbehinds stop 'rate cuts' firing inside bearish phrases like
+    # 'fewer rate cuts' / 'no rate cuts' / 'delayed rate cuts'
+    (r"(?:(?<!fewer )(?<!no )(?<!delay )(?<!delayed )(?<!postpone )"
+     r"\brate[- ]cuts?\b|cuts? (?:key |benchmark )?(?:interest )?rate\b|"
+     r"cuts? (?:interest )?rates|lower(?:s|ing)? (?:interest )?rates?|"
+     r"reduc(?:e|es|ing) (?:interest )?rates?|votes? to cut|"
+     r"rate[- ]cut cycle|easing cycle|dovish|\bpivot\b)", 3,
+     "rate-cut bets rise → yields & dollar headwind lifts gold"),
+    (r"inflation (?:eases|cools|falls|slows|drops|retreats)|"
+     r"cooler[- ]than[- ](?:expected|forecast)|cpi.*?(?:cooler|slower|"
+     r"below (?:the )?forecast)|pce.*?(?:cooler|slower|below)", 3,
+     "cooling inflation → more Fed cuts priced"),
+    (r"jobless claims (?:rise|surge|jump|climb)|unemployment (?:rises|"
+     r"jumps|climbs)|payrolls? (?:fall|drop|decline|miss)|nfp (?:miss|"
+     r"disappoint)|weaker[- ]than[- ](?:expected|forecast) (?:jobs|"
+     r"payrolls|employment|claims)", 2, "weak labor market → cut bets rise"),
+    (r"recession (?:fears?|warning|risk)|economic slowdown|contraction", 2,
+     "recession fears → safe-haven bid"),
+    (r"invad|missile|airstrike|air strike|nuclear|escalat|offensive|"
+     r"troops|declares? war|enters? the war|attacks? (?:on|near)|"
+     r"strikes? (?:on|near)", 2, "geopolitical escalation → haven demand"),
+    (r"sanction", 1, "sanctions tension → mild haven bid"),
+    (r"(?:central banks?|official sector)[^.]{0,30}"
+     r"(?:buy|buying|add|adding|purchas)|"
+     r"(?:buying|buys|purchas\w*) gold|gold buying|bullion (?:buying|"
+     r"demand)|adds? gold|gold purchases", 2,
+     "official-sector gold demand"),
+    (r"gold (?:rises|rallies|surges|jumps|climbs|gains|soars|hits? (?:a |"
+     r"another )?record|extends? (?:gains|rally))|record (?:high|run) "
+     r"(?:for gold|in gold)|gold price[^.]*?(?:up|rally|rise)", 3,
+     "gold momentum is already up"),
+    (r"dollar (?:weakens?|slides?|falls|drops|sinks|softens?)|"
+     r"dxy (?:drops?|falls|slides|sinks)", 2, "weaker dollar lifts gold"),
+    (r"yields? (?:fall|falls|drop|drops|slide|slides|ease|eases)", 2,
+     "falling yields lift gold"),
+    (r"de[- ]dollarisation|de[- ]dollarization|dollar loses (?:its )?"
+     r"reserve", 2, "de-dollarization bid"),
+    (r"gold[- ]backed|gold etf (?:inflow|inflows)|etf holdings (?:rise|"
+     r"climb|jump|grow)", 2, "ETF money flowing into gold"),
+    (r"tariff|trade war", 1, "trade-war premium (mildly supportive)"),
+]
+_BEAR_RULES = [
+    (r"rate hikes?|hikes? (?:key |benchmark )?(?:interest )?rate\b|"
+     r"hikes (?:interest )?rates|rais(?:e|es|ing) (?:interest )?rates?|"
+     r"lifts? (?:its )?rate|votes? to hike|votes? to raise|hawkish|"
+     r"higher for longer|"
+     r"no rush to cut|push(?:es|ing)? back (?:on )?cut|patient on "
+     r"(?:rate )?cuts|fewer (?:rate )?cuts|no (?:rate )?cuts|"
+     r"delay(?:s|ed|ing)? (?:rate )?cuts?|cuts? (?:off the table|"
+     r"unlikely|ruled out)", 3,
+     "hawkish repricing → yields & dollar up"),
+    (r"hot(?:ter)?[- ]than[- ](?:expected|forecast)|inflation "
+     r"(?:accelerat|heats? up|picks up|rises faster|surges)|cpi (?:beats?|"
+     r"jumps|surges|hot)|reaccelerat", 3, "hot inflation → fewer cuts priced"),
+    (r"payrolls? (?:beat|beats|surge|jump|rise|climb|soar)|nfp (?:beats?|"
+     r"strong)|strong (?:jobs|employment|labor market)|jobless claims "
+     r"(?:drop|fall|plunge)|unemployment (?:falls|drops)", 2,
+     "strong labor market → fewer cuts priced"),
+    (r"dollar (?:strengthens?|rallies|rises|firms|jumps|gains|"
+     r"rebounds?)|dxy (?:rises|jumps|rallies|climbs)", 2,
+     "stronger dollar weighs on gold"),
+    (r"yields? (?:rise|rises|surge|surges|climb|climbs|jump|jumps|spike|"
+     r"rebound)", 2, "rising yields weigh on gold"),
+    (r"gold (?:falls|drops|slides|plunges|tumbles|sinks|dips|retreats|"
+     r"under pressure|extends? (?:decline|losses)|set for[^.]*?loss|"
+     r"eases? (?:from|off))", 3, "gold momentum is already down"),
+    (r"profit[- ]taking", 2, "profit-taking flow"),
+    (r"risk[- ]on rally|stocks (?:rally|surge|jump|climb)|trade deal "
+     r"(?:reached|struck|agreed)|tariffs? (?:lifted|cut|removed|eased|"
+     r"paused)|de[- ]escalat|cease[- ]?fire|peace (?:deal|plan|talks)|"
+     r"truce", 2, "risk appetite returns → haven bid fades"),
+    (r"gold etf (?:outflow|outflows)|etf holdings (?:fall|drop|shrink)", 2,
+     "ETF money flowing out of gold"),
+]
+
+_BULL_RE = [(re.compile(p, re.I), w, why) for p, w, why in _BULL_RULES]
+_BEAR_RE = [(re.compile(p, re.I), w, why) for p, w, why in _BEAR_RULES]
+
+
+def gold_bias(text):
+    """Direction a headline implies for gold.
+
+    Returns dict(bias='BULLISH'|'BEARISH'|'MIXED', score=int, why=[reasons]).
+    |score| >= 2 (one solid rule or two weak ones) is needed for a directional
+    read — anything less is honestly MIXED."""
+    bull = [why for rx, _w, why in _BULL_RE if rx.search(text)]
+    bear = [why for rx, _w, why in _BEAR_RE if rx.search(text)]
+    score = 0
+    for rx, w, _why in _BULL_RE:
+        if rx.search(text):
+            score += w
+    for rx, w, _why in _BEAR_RE:
+        if rx.search(text):
+            score -= w
+    if bull and bear:
+        bias = "MIXED"                       # both sides fired — say so
+    elif score >= 2:
+        bias = "BULLISH"
+    elif score <= -2:
+        bias = "BEARISH"
+    else:
+        bias = "MIXED"
+    return dict(bias=bias, score=score,
+                why=(bull + bear) if (bull or bear) else
+                ["no clear directional trigger in the headline"])
+
+
+def event_playbook(title):
+    """How gold typically reacts to a calendar event's actual vs forecast."""
+    t = title.lower()
+    if "cpi" in t or "inflation" in t or "pce" in t:
+        return ("• Cooler than forecast → 🟢 gold rallies (more cuts priced)\n"
+                "• Hotter than forecast → 🔴 gold drops (fewer cuts priced)")
+    if ("fomc" in t or "fed" in t or "rate decision" in t
+            or "interest rate" in t or "powell" in t or "federal" in t):
+        return ("• Cut / dovish tone → 🟢 gold rallies\n"
+                "• Hold + hawkish tone → 🔴 gold drops")
+    if ("nfp" in t or "non-farm" in t or "nonfarm" in t
+            or "unemployment" in t or "jobless" in t or "employment" in t
+            or "payroll" in t):
+        return ("• Weak jobs (miss) → 🟢 gold rallies (cut bets rise)\n"
+                "• Strong jobs (beat) → 🔴 gold drops")
+    if "gdp" in t:
+        return ("• Weaker than forecast → 🟢 gold rallies\n"
+                "• Stronger than forecast → 🔴 gold drops")
+    if ("retail" in t or "pmi" in t or "consumer" in t or "sentiment" in t
+            or "durable goods" in t or "housing" in t or "ism" in t
+            or "orders" in t):
+        return ("• Weaker than forecast → 🟢 gold rallies\n"
+                "• Stronger than forecast → 🔴 gold drops")
+    return "• Direction depends on the actual number vs forecast"
+
+
+
 def snapshot():
     """Everything the web UI's Fundamentals & News card needs."""
     ev = upcoming(hours=48)
     hi = [e for e in ev if e["impact"] == "High"] or ev[:3]
-    news = [(ts, txt, "WatcherGuru") for ts, txt in watcher_headlines(limit=15)
+    news = [(ts, txt, "WatcherGuru", gold_bias(txt)["bias"])
+            for ts, txt in watcher_headlines(limit=15)
             if gold_relevant(txt)][:4]
-    news += [(ts, ttl, src) for ts, ttl, src in google_news(limit=10)
+    news += [(ts, ttl, src, gold_bias(ttl)["bias"])
+             for ts, ttl, src in google_news(limit=10)
              if gold_relevant(ttl)][:4]
     news.sort(key=lambda x: -x[0])
     return dict(

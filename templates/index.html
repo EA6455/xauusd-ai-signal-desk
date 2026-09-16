@@ -57,6 +57,7 @@
     cursor:pointer; flex:none}
   .panel.forex .secbtn, .panel.forex .sec{display:none}
   .tools{position:absolute; left:6px; top:10px; z-index:5; display:flex; flex-direction:column;
+    max-height:calc(100% - 24px); overflow-y:auto;
     gap:2px; background:#0d1320d9; border:1px solid var(--border); border-radius:10px; padding:4px 3px}
   .tools button{border:none; background:transparent; color:var(--muted); padding:3px 8px;
     font-size:13px; border-radius:7px; line-height:1.2}
@@ -539,7 +540,17 @@ const INITIAL = {{ payload|tojson }};
   const E = (p, id) => document.getElementById(id + p.sfx);
   const fmtPD = (p, v) => (v == null) ? '—' :
     Number(v).toLocaleString('en-US', {minimumFractionDigits: p.dec, maximumFractionDigits: p.dec});
-  function drawAll(){ panelsAlive().forEach(p => drawChart(p)); }
+  function markDirty(p){ p._dirty = true; }
+  function drawAll(){ panelsAlive().forEach(markDirty); }
+  // smooth rendering: one rAF loop paints dirty panels at display refresh
+  // rate — bursts of ticks / hover moves / brush strokes coalesce into a
+  // single frame draw instead of hammering the canvas per event
+  (function rafLoop(){
+    panelsAlive().forEach(p => {
+      if(p._dirty && p.data){ p._dirty = false; try{ drawChart(p); }catch(e){} }
+    });
+    requestAnimationFrame(rafLoop);
+  })();
 
   // ---------- chart preferences (auto-saved layout) ----------
   const DEFAULT_PREFS = {bull: '#22c55e', bear: '#ef4444'};
@@ -680,7 +691,7 @@ const INITIAL = {{ payload|tojson }};
       $('latBadge').textContent = (age < 90 && !closed)
         ? '⏱ ' + (age < 10 ? age.toFixed(1) + 's' : Math.round(age) + 's') + ' behind' : '';
     }
-    drawChart(p);
+    markDirty(p);
   }
 
   // forex panels: poll the quote endpoint (the SSE stream is gold-only)
@@ -1267,10 +1278,14 @@ const INITIAL = {{ payload|tojson }};
     const tb = document.createElement('div');
     tb.className = 'tools';
     tb.innerHTML = [
-      ['cursor', '✛', 'Cursor / crosshair'], ['trend', '╱', 'Trend line'],
-      ['ray', '↗', 'Ray'], ['hline', '─', 'Horizontal line'],
-      ['vline', '│', 'Vertical line'],
-      ['rect', '▭', 'Rectangle'], ['fib', '📐', 'Fibonacci retracement'],
+      ['cursor', '✛', 'Cursor — drag any drawing to move it'],
+      ['trend', '╱', 'Trend line'], ['arrow', '⇗', 'Arrow'],
+      ['ray', '↗', 'Ray'], ['hray', '→', 'Horizontal ray (to the right)'],
+      ['hline', '─', 'Horizontal line'],
+      ['vline', '│', 'Vertical line'], ['cross', '✜', 'Cross lines'],
+      ['rect', '▭', 'Rectangle'], ['ellipse', '◯', 'Ellipse / circle'],
+      ['channel', '∥', 'Parallel channel (3 clicks)'],
+      ['fib', '📐', 'Fibonacci retracement'],
       ['measure', '📏', 'Measure move (price, %, bars)'],
       ['pos', '⚖', 'Long / Short position tool (entry + SL -> TPs & R:R)'],
       ['brush', '✎', 'Brush — freehand, click and drag'],
@@ -1320,24 +1335,21 @@ const INITIAL = {{ payload|tojson }};
       const txt = prompt('Note text:');
       if(txt){ (p.draws = p.draws || []).push({type: 'text',
         pts: [{t: pos.t, p: pos.price}], txt: txt, col: p.drawColor}); saveDraws(p); }
-      drawChart(p); return;
+      markDirty(p); return;
     }
-    if(p.tool === 'hline'){
-      (p.draws = p.draws || []).push({type: 'hline',
+    if(p.tool === 'hline' || p.tool === 'vline' || p.tool === 'hray' || p.tool === 'cross'){
+      (p.draws = p.draws || []).push({type: p.tool,
         pts: [{t: pos.t, p: pos.price}], col: p.drawColor});
-      saveDraws(p); drawChart(p); return;
+      saveDraws(p); markDirty(p); return;
     }
-    if(p.tool === 'vline'){
-      (p.draws = p.draws || []).push({type: 'vline',
-        pts: [{t: pos.t, p: pos.price}], col: p.drawColor});
-      saveDraws(p); drawChart(p); return;
-    }
+    const NEED = {trend: 2, arrow: 2, ray: 2, rect: 2, ellipse: 2, fib: 2,
+                  measure: 2, pos: 2, channel: 3};
     p.pending.push({t: pos.t, p: pos.price});
-    if(p.pending.length === 2){
+    if(p.pending.length >= (NEED[p.tool] || 2)){
       p.draws.push({type: p.tool, pts: p.pending.slice(), col: p.drawColor});
       p.pending = []; saveDraws(p);
     }
-    drawChart(p);
+    markDirty(p);
   }
 
   function distSeg(px, py, x1, y1, x2, y2){
@@ -1347,22 +1359,25 @@ const INITIAL = {{ payload|tojson }};
     return Math.hypot(px - (x1 + u * dx), py - (y1 + u * dy));
   }
 
-  function eraseAt(p, pos){
-    const s = p._scale; if(!s || !p.draws) return;
+  function hitTest(p, pos){
+    // topmost drawing index at pos, else -1
+    const s = p._scale; if(!s || !p.draws) return -1;
     const FIBL = [0, .236, .382, .5, .618, .786, 1];
     for(let i = p.draws.length - 1; i >= 0; i--){
       const d = p.draws[i];
       let hit = false;
-      if(d.type === 'hline'){
-        hit = Math.abs(s.Y(d.pts[0].p) - pos.y) < 9;
+      if(d.type === 'hline' || d.type === 'hray'){
+        hit = Math.abs(s.Y(d.pts[0].p) - pos.y) < 9 &&
+              (d.type === 'hline' || pos.x >= xForT(p, d.pts[0].t) - 6);
       } else if(d.type === 'text'){
         const x = xForT(p, d.pts[0].t);
         hit = Math.abs(x - pos.x) < 70 && Math.abs(s.Y(d.pts[0].p) - pos.y) < 14;
-      } else if(d.type === 'vline'){
-        hit = Math.abs(xForT(p, d.pts[0].t) - pos.x) < 9;
+      } else if(d.type === 'vline' || d.type === 'cross'){
+        hit = Math.abs(xForT(p, d.pts[0].t) - pos.x) < 9 ||
+              (d.type === 'cross' && Math.abs(s.Y(d.pts[0].p) - pos.y) < 9);
       } else if(d.type === 'brush'){
-        hit = d.pts.some((pt, i) => i > 0 &&
-          distSeg(pos.x, pos.y, xForT(p, d.pts[i - 1].t), s.Y(d.pts[i - 1].p),
+        hit = d.pts.some((pt, j) => j > 0 &&
+          distSeg(pos.x, pos.y, xForT(p, d.pts[j - 1].t), s.Y(d.pts[j - 1].p),
                   xForT(p, pt.t), s.Y(pt.p)) < 9);
       } else {
         const x1 = xForT(p, d.pts[0].t), y1 = s.Y(d.pts[0].p);
@@ -1370,10 +1385,131 @@ const INITIAL = {{ payload|tojson }};
         if(d.type === 'rect'){
           hit = pos.x > Math.min(x1, x2) - 4 && pos.x < Math.max(x1, x2) + 4 &&
                 pos.y > Math.min(y1, y2) - 4 && pos.y < Math.max(y1, y2) + 4;
-        } else if(d.type === 'vline'){
-          const x = xForT(p, a1.t);
-          g.strokeStyle = d.col; g.beginPath();
-          g.moveTo(x, s.padT); g.lineTo(x, s.H - s.padB); g.stroke();
+        } else if(d.type === 'ellipse'){
+          const rx = Math.abs(x2 - x1) / 2 || 1, ry = Math.abs(y2 - y1) / 2 || 1;
+          const dx = (pos.x - (x1 + x2) / 2) / rx, dy = (pos.y - (y1 + y2) / 2) / ry;
+          hit = dx * dx + dy * dy <= 1.2;
+        } else if(d.type === 'fib'){
+          hit = pos.x >= Math.min(x1, x2) - 4 &&
+                FIBL.some(l => Math.abs(s.Y(d.pts[1].p + (d.pts[0].p - d.pts[1].p) * l) - pos.y) < 7);
+        } else if(d.type === 'channel' && d.pts.length >= 3){
+          const x3 = xForT(p, d.pts[2].t), y3 = s.Y(d.pts[2].p);
+          hit = distSeg(pos.x, pos.y, x1, y1, x2, y2) < 9 ||
+                distSeg(pos.x, pos.y, x3, y3, x3 + (x2 - x1), y3 + (y2 - y1)) < 9;
+        } else {
+          hit = distSeg(pos.x, pos.y, x1, y1, x2, y2) < 9;
+        }
+      }
+      if(hit) return i;
+    }
+    return -1;
+  }
+
+  function eraseAt(p, pos){
+    const i = hitTest(p, pos);
+    if(i >= 0){ p.draws.splice(i, 1); saveDraws(p); markDirty(p); }
+  }
+
+  function xForT(p, t){
+    const s = p._scale; if(!s) return 0;
+    const cs = s.cs, last = cs[cs.length - 1].t;
+    if(t <= cs[0].t) return s.X(0) - (cs[0].t - t) / s.tfsec * s.spacing;
+    if(t >= last) return s.X(s.n - 1) + (t - last) / s.tfsec * s.spacing;
+    let a = 0, b = cs.length - 1;
+    while(b - a > 1){ const m = (a + b) >> 1; if(cs[m].t <= t) a = m; else b = m; }
+    return s.X(a);
+  }
+
+  function renderDrawings(p, g){
+    const s = p._scale; if(!s) return;
+    const items = (p.draws || []).slice();
+    if(p.pending.length && p.cursor){
+      const NEED = {trend: 2, arrow: 2, ray: 2, rect: 2, ellipse: 2, fib: 2,
+                    measure: 2, pos: 2, channel: 3};
+      const cur = {t: p.cursor.t, p: p.cursor.price};
+      const pts = p.pending.concat([cur]).slice(0, NEED[p.tool] || 2);
+      items.push({type: p.tool, pts: pts, col: p.drawColor, ghost: true});
+    }
+    if(p._brush && p._brush.length > 1){
+      g.strokeStyle = p.drawColor; g.lineWidth = 1.6; g.beginPath();
+      p._brush.forEach((pt, i) => {
+        const x = xForT(p, pt.t), y = s.Y(pt.p);
+        if(i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+      });
+      g.stroke();
+    }
+    const FIBL = [0, .236, .382, .5, .618, .786, 1];
+    for(const d of items){
+      g.lineWidth = 1.4; g.setLineDash(d.ghost ? [4, 4] : []);
+      const a1 = d.pts[0], a2 = d.pts[1];
+      if(d.type === 'hline' || d.type === 'hray'){
+        const y = s.Y(a1.p);
+        const x1 = (d.type === 'hray') ? xForT(p, a1.t) : s.padL;
+        g.strokeStyle = d.col; g.beginPath(); g.moveTo(x1, y);
+        g.lineTo(s.W - s.padR + 4, y); g.stroke();
+        g.fillStyle = d.col; g.font = 'bold 9px ui-monospace,Menlo,monospace';
+        g.textAlign = 'left'; g.textBaseline = 'bottom';
+        g.fillText(fmtPD(p, a1.p), s.W - s.padR - 62, y - 2);
+      } else if(d.type === 'text'){
+        const x = xForT(p, a1.t), y = s.Y(a1.p);
+        g.fillStyle = d.col; g.font = 'bold 11px ui-monospace,Menlo,monospace';
+        g.textAlign = 'left'; g.textBaseline = 'bottom';
+        g.fillText(d.txt || '•', x, y - 3);
+      } else if(d.type === 'vline' || d.type === 'cross'){
+        const x = xForT(p, a1.t);
+        g.strokeStyle = d.col; g.beginPath();
+        g.moveTo(x, s.padT); g.lineTo(x, s.H - s.padB); g.stroke();
+        if(d.type === 'cross'){
+          const y = s.Y(a1.p);
+          g.beginPath(); g.moveTo(s.padL, y); g.lineTo(s.W - s.padR + 4, y); g.stroke();
+        }
+      } else {
+        const x1 = xForT(p, a1.t), y1 = s.Y(a1.p);
+        const x2 = xForT(p, a2.t), y2 = s.Y(a2.p);
+        if(d.type === 'trend'){
+          g.strokeStyle = d.col; g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke();
+        } else if(d.type === 'arrow'){
+          g.strokeStyle = d.col; g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke();
+          const ang = Math.atan2(y2 - y1, x2 - x1), hl = 10;
+          g.fillStyle = d.col; g.beginPath();
+          g.moveTo(x2, y2);
+          g.lineTo(x2 - hl * Math.cos(ang - 0.45), y2 - hl * Math.sin(ang - 0.45));
+          g.lineTo(x2 - hl * Math.cos(ang + 0.45), y2 - hl * Math.sin(ang + 0.45));
+          g.closePath(); g.fill();
+        } else if(d.type === 'ray'){
+          const dx = x2 - x1 || 1e-6, dy = y2 - y1;
+          const u = (s.W - s.padR + 4 - x1) / dx;
+          g.strokeStyle = d.col; g.beginPath(); g.moveTo(x1, y1);
+          g.lineTo(x1 + Math.max(u, 0.001) * dx, y1 + Math.max(u, 0.001) * dy); g.stroke();
+        } else if(d.type === 'rect'){
+          g.globalAlpha = d.ghost ? 0.5 : 1;
+          g.fillStyle = hexToRgba(d.col, 0.12);
+          g.fillRect(Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1));
+          g.strokeStyle = d.col;
+          g.strokeRect(Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1));
+          g.globalAlpha = 1;
+        } else if(d.type === 'ellipse'){
+          g.globalAlpha = d.ghost ? 0.5 : 1;
+          g.fillStyle = hexToRgba(d.col, 0.10);
+          g.strokeStyle = d.col;
+          g.beginPath();
+          g.ellipse((x1 + x2) / 2, (y1 + y2) / 2, Math.abs(x2 - x1) / 2 || 1,
+                    Math.abs(y2 - y1) / 2 || 1, 0, 0, Math.PI * 2);
+          g.fill(); g.stroke(); g.globalAlpha = 1;
+        } else if(d.type === 'channel'){
+          g.globalAlpha = d.ghost ? 0.5 : 1;
+          g.strokeStyle = d.col;
+          g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke();
+          if(d.pts.length >= 3){
+            const a3 = d.pts[2];
+            const x3 = xForT(p, a3.t), y3 = s.Y(a3.p);
+            const dx = x2 - x1, dy = y2 - y1;
+            g.beginPath(); g.moveTo(x3, y3); g.lineTo(x3 + dx, y3 + dy); g.stroke();
+            g.fillStyle = hexToRgba(d.col, 0.08);
+            g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2);
+            g.lineTo(x3 + dx, y3 + dy); g.lineTo(x3, y3); g.closePath(); g.fill();
+          }
+          g.globalAlpha = 1;
         } else if(d.type === 'measure'){
           const dp = a2.p - a1.p, dpct = dp / a1.p * 100;
           const bars = Math.max(1, Math.round((a2.t - a1.t) / s.tfsec));
@@ -1423,75 +1559,6 @@ const INITIAL = {{ payload|tojson }};
           });
           g.stroke(); g.lineWidth = 1.4;
         } else if(d.type === 'fib'){
-          hit = pos.x >= Math.min(x1, x2) - 4 &&
-                FIBL.some(l => Math.abs(s.Y(d.pts[1].p + (d.pts[0].p - d.pts[1].p) * l) - pos.y) < 7);
-        } else {
-          hit = distSeg(pos.x, pos.y, x1, y1, x2, y2) < 9;
-        }
-      }
-      if(hit){ p.draws.splice(i, 1); saveDraws(p); drawChart(p); return; }
-    }
-  }
-
-  function xForT(p, t){
-    const s = p._scale; if(!s) return 0;
-    const cs = s.cs, last = cs[cs.length - 1].t;
-    if(t <= cs[0].t) return s.X(0) - (cs[0].t - t) / s.tfsec * s.spacing;
-    if(t >= last) return s.X(s.n - 1) + (t - last) / s.tfsec * s.spacing;
-    let a = 0, b = cs.length - 1;
-    while(b - a > 1){ const m = (a + b) >> 1; if(cs[m].t <= t) a = m; else b = m; }
-    return s.X(a);
-  }
-
-  function renderDrawings(p, g){
-    const s = p._scale; if(!s) return;
-    const items = (p.draws || []).slice();
-    if(p.pending.length && p.cursor){
-      items.push({type: p.tool, pts: [p.pending[0], {t: p.cursor.t, p: p.cursor.price}],
-                  col: p.drawColor, ghost: true});
-    }
-    const FIBL = [0, .236, .382, .5, .618, .786, 1];
-    if(p._brush && p._brush.length > 1){
-      g.strokeStyle = p.drawColor; g.lineWidth = 1.6; g.beginPath();
-      p._brush.forEach((pt, i) => {
-        const x = xForT(p, pt.t), y = s.Y(pt.p);
-        if(i === 0) g.moveTo(x, y); else g.lineTo(x, y);
-      });
-      g.stroke();
-    }
-    for(const d of items){
-      g.lineWidth = 1.4; g.setLineDash(d.ghost ? [4, 4] : []);
-      const a1 = d.pts[0], a2 = d.pts[1];
-      if(d.type === 'hline'){
-        const y = s.Y(a1.p);
-        g.strokeStyle = d.col; g.beginPath(); g.moveTo(s.padL, y);
-        g.lineTo(s.W - s.padR + 4, y); g.stroke();
-        g.fillStyle = d.col; g.font = 'bold 9px ui-monospace,Menlo,monospace';
-        g.textAlign = 'left'; g.textBaseline = 'bottom';
-        g.fillText(fmtPD(p, a1.p), s.W - s.padR - 62, y - 2);
-      } else if(d.type === 'text'){
-        const x = xForT(p, a1.t), y = s.Y(a1.p);
-        g.fillStyle = d.col; g.font = 'bold 11px ui-monospace,Menlo,monospace';
-        g.textAlign = 'left'; g.textBaseline = 'bottom';
-        g.fillText(d.txt || '•', x, y - 3);
-      } else {
-        const x1 = xForT(p, a1.t), y1 = s.Y(a1.p);
-        const x2 = xForT(p, a2.t), y2 = s.Y(a2.p);
-        if(d.type === 'trend'){
-          g.strokeStyle = d.col; g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke();
-        } else if(d.type === 'ray'){
-          const dx = x2 - x1 || 1e-6, dy = y2 - y1;
-          const u = (s.W - s.padR + 4 - x1) / dx;
-          g.strokeStyle = d.col; g.beginPath(); g.moveTo(x1, y1);
-          g.lineTo(x1 + Math.max(u, 0.001) * dx, y1 + Math.max(u, 0.001) * dy); g.stroke();
-        } else if(d.type === 'rect'){
-          g.globalAlpha = d.ghost ? 0.5 : 1;
-          g.fillStyle = hexToRgba(d.col, 0.12);
-          g.fillRect(Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1));
-          g.strokeStyle = d.col;
-          g.strokeRect(Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1));
-          g.globalAlpha = 1;
-        } else if(d.type === 'fib'){
           g.font = '9px ui-monospace,Menlo,monospace'; g.textAlign = 'left'; g.textBaseline = 'bottom';
           const x0 = Math.min(x1, x2);
           for(const l of FIBL){
@@ -1533,28 +1600,53 @@ const INITIAL = {{ payload|tojson }};
       if(!p.data || !p.data.candles || p.data.candles.length < 2) return;
       const s = p._scale; if(!s) return;
       const r = cv.getBoundingClientRect();
+      if(p._drag){
+        const pos = chartPos(p, e);
+        if(pos){
+          const dt = pos.t - p._drag.start.t, dp = pos.price - p._drag.start.price;
+          p.draws[p._drag.i].pts = p._drag.snap.map(pt => ({t: pt.t + dt, p: pt.p + dp}));
+        }
+        markDirty(p); return;
+      }
       const k = Math.floor((e.clientX - r.left - s.padL) / s.spacing);
       p.hover = (k >= 0 && k < s.n) ? k : null;
       p.hoverY = e.clientY - r.top;
       p.cursor = chartPos(p, e);
-      drawChart(p);
+      if(p.tool === 'cursor' && p.cursor && p.draws){
+        cv.style.cursor = hitTest(p, p.cursor) >= 0 ? 'move' : 'crosshair';
+      }
+      markDirty(p);
     });
     cv.addEventListener('mouseleave', () => {
-      p.hover = null; p.hoverY = null; p.cursor = null; drawChart(p);
+      p.hover = null; p.hoverY = null; p.cursor = null; markDirty(p);
     });
     cv.addEventListener('click', e => chartClick(p, e));
     cv.addEventListener('contextmenu', e => {
-      e.preventDefault(); p.pending = []; p._brush = null; drawChart(p);
+      e.preventDefault(); p.pending = []; p._brush = null; markDirty(p);
     });
     cv.addEventListener('mousedown', e => {
-      if(p.tool !== 'brush') return;
+      if(p.tool === 'brush'){
+        const pos = chartPos(p, e);
+        if(pos){ p._brush = [pos]; e.preventDefault(); }
+        return;
+      }
+      if(p.tool !== 'cursor') return;
       const pos = chartPos(p, e);
-      if(pos){ p._brush = [pos]; e.preventDefault(); }
+      if(!pos) return;
+      const i = hitTest(p, pos);
+      if(i >= 0){
+        p._drag = {i: i, start: pos,
+                   snap: JSON.parse(JSON.stringify(p.draws[i].pts))};
+        e.preventDefault();
+      }
+    });
+    window.addEventListener('mouseup', () => {
+      if(p._drag){ p._drag = null; saveDraws(p); }
     });
     cv.addEventListener('mousemove', e => {
       if(p.tool === 'brush' && p._brush){
         const pos = chartPos(p, e);
-        if(pos){ p._brush.push(pos); drawChart(p); }
+        if(pos){ p._brush.push(pos); markDirty(p); }
       }
     });
     cv.addEventListener('mouseup', () => {
@@ -1563,7 +1655,7 @@ const INITIAL = {{ payload|tojson }};
           p.draws.push({type: 'brush', pts: p._brush, col: p.drawColor});
           saveDraws(p);
         }
-        p._brush = null; drawChart(p);
+        p._brush = null; markDirty(p);
       }
     });
     document.querySelectorAll('#panelA' + p.sfx + ' .tabs button').forEach(b =>

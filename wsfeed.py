@@ -32,6 +32,12 @@ _hist = deque(maxlen=2400)          # (epoch, mid) — ~1h of bbo updates
 _started = False
 
 
+def hist():
+    """Snapshot of the raw tick history as [(epoch, mid), ...]."""
+    with _lock:
+        return list(_hist)
+
+
 def mid(max_age=30.0):
     """(mid_price, received_at) or (None, None) if stale/unavailable."""
     with _lock:

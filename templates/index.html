@@ -53,6 +53,27 @@
   .muted{color:var(--muted)} .small{font-size:12px}
 
   .tabs{display:flex; gap:4px; background:var(--card2); border:1px solid var(--border); border-radius:10px; padding:3px}
+  .tfbar{overflow-x:auto; max-width:100%; scrollbar-width:thin}
+  .tfbar button{padding:6px 8px; font-size:11.5px; flex:none}
+  .tsep{width:1px; background:var(--border); margin:4px 2px; flex:none}
+  .radar{margin-top:12px; border-top:1px solid var(--border); padding-top:10px}
+  .radar-h{font-size:10.5px; font-weight:800; letter-spacing:1.2px; color:var(--muted);
+    text-transform:uppercase; margin-bottom:4px}
+  .zr{display:flex; align-items:center; gap:8px; padding:5px 0;
+    border-top:1px dashed rgba(148,163,184,.14); font-size:12px; flex-wrap:wrap}
+  .zr:first-of-type{border-top:none}
+  .ztf{font-size:10px; font-weight:800; color:var(--muted); width:22px; flex:none}
+  .zdot{width:9px; height:9px; border-radius:3px; flex:none}
+  .zdot.demand{background:var(--green)}
+  .zdot.supply{background:var(--red)}
+  .zrange{font-weight:700; color:var(--text)}
+  .zst{font-size:9.5px; font-weight:800; padding:2px 8px; border-radius:999px;
+    text-transform:uppercase; letter-spacing:.6px; flex:none}
+  .zst.live{background:rgba(38,211,111,.14); color:var(--green)}
+  .zst.arming{background:#2a230f; color:var(--amber)}
+  .zst.tested{background:#1a2130; color:#7c8aa0}
+  .zdist{color:var(--muted); width:58px; text-align:right; flex:none}
+  .zmiss{font-size:10.5px; color:var(--muted); width:100%; padding-left:30px; margin-top:-2px}
   .tabs button{border:none; background:transparent; padding:6px 13px; border-radius:8px; font-size:12.5px; font-weight:700; color:var(--muted)}
   .tabs button.on{background:linear-gradient(180deg,#26334f,#1d2740); color:var(--gold);
     box-shadow:0 0 0 1px #eab54f33, 0 2px 8px #00000059}
@@ -234,10 +255,12 @@
       <div class="card">
         <div class="card-head">
           <h2>Price &amp; Signals</h2>
-          <div class="tabs">
-            <button data-tf="15m">15m</button>
-            <button data-tf="60m" class="on">1H</button>
-            <button data-tf="1d">1D</button>
+          <div class="tabs tfbar">
+            <button data-tf="1s">1s</button><button data-tf="5s">5s</button><button data-tf="15s">15s</button><button data-tf="30s">30s</button>
+            <span class="tsep"></span>
+            <button data-tf="1m">1m</button><button data-tf="5m">5m</button><button data-tf="15m">15m</button><button data-tf="30m">30m</button><button data-tf="60m" class="on">1H</button><button data-tf="2h">2H</button><button data-tf="4h">4H</button>
+            <span class="tsep"></span>
+            <button data-tf="1d">1D</button><button data-tf="1w">1W</button><button data-tf="1M">1M</button><button data-tf="1Y">1Y</button>
           </div>
         </div>
         <div class="price-row">
@@ -315,6 +338,7 @@
       <div class="card" id="entryCard">
         <div class="card-head"><h2>SNR Entry · 15m</h2><span class="grade wait" id="entryStatus">…</span></div>
         <div id="entryBody"><div class="muted small">loading tactical engine…</div></div>
+        <div id="radarBody"></div>
       </div>
 
       <div class="card">
@@ -389,7 +413,9 @@ const INITIAL = {{ payload|tojson }};
                   hover: null, dispPrice: null, refPrice: null, lastTickT: 0,
                   clockSkew: 0, entry: null, entryStats: null };
   let audioCtx = null, pollTimer = null, entryTimer = null;
-  const TF_SEC = {'15m': 900, '60m': 3600, '1d': 86400};
+  const TF_SEC = {'1s':1, '5s':5, '15s':15, '30s':30, '1m':60, '5m':300, '15m':900,
+    '30m':1800, '60m':3600, '2h':7200, '4h':14400, '1d':86400, '1w':604800,
+    '1M':2592000, '1Y':31536000};
 
   // ---------- formatting ----------
   const fmtP = p => (p == null) ? '—' :
@@ -579,6 +605,29 @@ const INITIAL = {{ payload|tojson }};
     const total = 8 + (llm && llm.seats ? llm.seats.length : 0);
     if(c.asOf) $('deskTime').textContent = total + ' models · updated ' + new Date(c.asOf * 1000)
       .toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit'});
+  }
+
+  // ---------- zone radar ----------
+  function renderRadar(){
+    const body = $('radarBody');
+    const r = state.data && state.data.radar;
+    if(!r || !r.length){ body.innerHTML = ''; return; }
+    let h = '<div class="radar"><div class="radar-h">zone radar · what the desk sees (' + r.length + ')</div>';
+    h += r.map(z => {
+      const cls = z.status === 'live' ? 'live' : z.status === 'arming' ? 'arming' : 'tested';
+      const lbl = z.status === 'live' ? 'setup now' : z.status;
+      return '<div class="zr">'
+        + '<span class="ztf">' + z.tf + '</span>'
+        + '<span class="zdot ' + z.side + '"></span>'
+        + '<span class="zrange">' + z.bottom.toFixed(1) + ' – ' + z.top.toFixed(1) + '</span>'
+        + '<span class="zst ' + cls + '">' + lbl + '</span>'
+        + '<span class="zdist">' + (z.dist >= 0 ? '+' : '') + z.dist.toFixed(1) + '</span>'
+        + (z.missing && z.missing.length
+            ? '<span class="zmiss">missing: ' + z.missing.join(', ') + '</span>' : '')
+        + '</div>';
+    }).join('');
+    h += '</div>';
+    body.innerHTML = h;
   }
 
   // ---------- tactical entry ----------
@@ -900,7 +949,7 @@ const INITIAL = {{ payload|tojson }};
         '-bar hit rate: ' + (hr.wins / hr.total * 100).toFixed(0) + '% (' + hr.wins + '/' + hr.total + ')'
       : 'No historical signal flips in the loaded window.';
 
-    renderNote(); renderDesk(); renderTracker(); renderAlerts(); renderPa(); renderFundamentals();
+    renderNote(); renderDesk(); renderTracker(); renderAlerts(); renderPa(); renderFundamentals(); renderRadar();
     if(d.entry){ renderEntry(); }
     drawChart();
   }

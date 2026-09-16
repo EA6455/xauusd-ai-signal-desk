@@ -438,6 +438,66 @@ def evaluate(candles15, candles_1h=None):
 
 
 # ------------------------------------------------------------------ backtest
+RADAR_MISS = {"struct": "market structure", "bos": "break of structure",
+              "origin": "zone origin BOS", "fresh": "fresh (untested)",
+              "htf": "1H trend"}
+
+
+def zone_radar(candles15, candles_1h=None, price=None, max_zones=9):
+    """Every SNR zone near price — the transparent view of what the desk
+    sees: 15m zones plus 1H zones, each with its live status and exactly
+    which confluence checks are missing. Answers 'I can see a setup here —
+    why is the engine not signaling?'"""
+    out = []
+    for label, cl in (("15m", candles15), ("1H", candles_1h or [])):
+        if not cl or len(cl) < 200:
+            continue
+        try:
+            pack = _snr_pack(cl)
+        except Exception:  # noqa: BLE001
+            continue
+        n = pack["n"]
+        i_last = n - 2
+        if i_last < 5:
+            continue
+        px = float(price if price is not None else cl[-1]["c"])
+        a = float(pack["atr"][i_last]) or 1.0
+        for z in pack["zones"]:
+            if z["usable_from"] > i_last:
+                continue                     # zone not born yet
+            fresh = z["first_touch"] is None or z["first_touch"] > i_last
+            mid = (z["top"] + z["bottom"]) / 2.0
+            dist = mid - px
+            near = (z["bottom"] - 2.5 * a <= px <= z["top"] + 2.5 * a
+                    or abs(dist) <= 3.0 * a)
+            if not near:
+                continue
+            side = z["side"]
+            d = 1 if side == "demand" else -1
+            touching = (px <= z["top"] + 0.05) if d == 1 else \
+                       (px >= z["bottom"] - 0.05)
+            checks = dict(
+                struct=pack["struct"][i_last] == d,
+                bos=bool(pack["bos"][i_last]),
+                origin=bool(z["caused_bos"]),
+                fresh=bool(fresh),
+                htf=pack["htf"][i_last] == d)
+            passed = sum(checks.values())
+            if not fresh:
+                status = "tested"            # retested once — invalid per SNR
+            elif touching and passed == 5:
+                status = "live"              # full house retest right now
+            else:
+                status = "arming"
+            out.append(dict(
+                tf=label, side=side,
+                top=round(float(z["top"]), 1), bottom=round(float(z["bottom"]), 1),
+                dist=round(dist, 1), status=status, passed=int(passed),
+                missing=[RADAR_MISS[k] for k, v in checks.items() if not v]))
+    out.sort(key=lambda r: abs(r["dist"]))
+    return out[:max_zones]
+
+
 def backtest_stats(candles15, min_grade="A+"):
     """Historical performance of SNR setups on the loaded 15m data,
     with a per-grade breakdown (A+ / B+ / C+)."""

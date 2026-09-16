@@ -34,7 +34,15 @@ os.makedirs(MODELS_DIR, exist_ok=True)
 MODEL_MIX = 0.45                    # weight of the ML model in the composite score
 RULES_MIX = 1.0 - MODEL_MIX
 BUY_TH, SELL_TH = 0.20, -0.20       # composite-score thresholds
-WINDOW = {"15m": 180, "60m": 180, "1d": 240}   # bars shown on the chart
+WINDOW = {"1s": 240, "5s": 240, "15s": 240, "30s": 240, "1m": 240, "5m": 200,
+          "15m": 180, "30m": 200, "60m": 180, "2h": 180, "4h": 180, "1d": 240,
+          "1w": 160, "1M": 180, "1Y": 40}   # bars shown on the chart
+
+# payload rebuild cadence per tf (seconds) — fast for live tfs, relaxed for
+# slow ones (the forming candle still updates from ticks on every tf)
+REBUILD_S = {"1s": 8, "5s": 10, "15s": 15, "30s": 20, "1m": 30, "5m": 45,
+             "15m": 45, "30m": 45, "60m": 60, "2h": 120, "4h": 180, "1d": 600,
+             "1w": 1200, "1M": 1800, "1Y": 3600}
 
 def _tg_secret(fname):
     """Bot token / chat id from a local file next to the app (not committed),
@@ -829,6 +837,8 @@ def build_payload(tf, d):
                                       p=m["entry"], outcome=m["outcome"])
                                  for m in setups if m["i"] >= s0][-30:]
             payload["sessionStats"] = entries.session_stats(setups)
+            payload["radar"] = entries.zone_radar(
+                candles, d1h.get("candles"), price=payload["price"])
             ensure_trade(ent)
             maybe_setup_alert(ent)
         except Exception:  # noqa: BLE001
@@ -870,7 +880,8 @@ def refresh(tf, force=False, allow_build=True):
         need = (st.payload is None or d.get("changed")
                 or (d.get("fetchedAt") != getattr(st, "lastFetch", None)
                     and (last_bar != getattr(st, "lastBar", None)
-                         or time.time() - getattr(st, "builtAt", 0.0) > 45)))
+                         or time.time() - getattr(st, "builtAt", 0.0)
+                         > REBUILD_S.get(tf, 45))))
         building = getattr(st, "building", False)
     if need and not building and allow_build:
         st.building = True

@@ -520,10 +520,10 @@ def maybe_setup_alert(ent):
         a = dict(id=_next_id(), time=int(time.time()), tf="15m", type=typ,
                  price=ent["entry"], score=round(ent["passed"] / 8.0, 2),
                  confidence=round(ent["passed"] / 8.0, 2),
-                 msg=(f"SNR {grade} {ent['direction']} retest @ {ent['entry']:,.2f} · "
-                      f"zone {ent['entryZone'][0]:,.1f}–{ent['entryZone'][1]:,.1f} · "
-                      f"SL {ent['sl']:,.2f} · TP1 {ent['tp1']:,.2f} · "
-                      f"{ent['passed']}/8 SNR checks"))
+                msg=(f"SNR {grade} {ent['direction']} retest @ {ent['entry']:,.2f} · "
+                     f"zone {ent['entryZone'][0]:,.1f}–{ent['entryZone'][1]:,.1f} · "
+                     f"SL {ent['sl']:,.2f} · TP1 {ent['tp1']:,.2f} · "
+                     f"{ent['passed']}/8 SNR checks · 👉 trade now on your own broker"))
         STATE["alerts"].insert(0, a)
         del STATE["alerts"][100:]
         _save_state()
@@ -553,6 +553,7 @@ def maybe_setup_alert(ent):
         f"🎯 Entry: {ent['entry']:,.2f}\n"
         f"🛑 SL: {ent['sl']:,.2f}\n"
         f"🎯 TP: {ent['tp1']:,.2f}\n\n"
+        f"👉 Trade now on your own broker\n\n"
         f"⭐ SNR Rating: {grade}{warn}")
 
 

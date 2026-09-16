@@ -363,13 +363,14 @@ def maybe_zone_watch(ent):
 _armed_mem = {"t": 0.0, "keys": []}
 
 
-def maybe_armed_alert(ent):
-    """🎯 Zone armed: a fresh SNR zone has 6/8+ confluence in place but price
-    has NOT returned yet (the missing check is the first retest). Phone
-    heads-up so the zone can be watched / a price alert placed there — this
-    is NOT an entry signal; the entry card follows if the retest confirms.
-    One alert per zone, 60-min global gap. Deliberately fires during event
-    windows too (a zone arming is a standing fact, not an entry)."""
+def maybe_momentum_alert(ent):
+    """⚡ Momentum entry: a fresh SNR zone has 6/8+ confluence in place but
+    price has NOT returned (missing check = first retest). Instead of waiting
+    for the retest, fire an immediately tradeable card at MARKET price with
+    ATR-based risk and 1:2 RR (trend continuation in the armed zone's
+    direction). The classic retest A+/B+/C+ cards still fire separately if
+    price returns to the zone. One card per zone, 60-min global gap, live
+    sessions only, event-gated."""
     if not ent or not ent.get("zoneKey") or not ent.get("zoneSide"):
         return
     if ent.get("touching") or ent.get("active"):
@@ -378,25 +379,45 @@ def maybe_armed_alert(ent):
         return
     if ent.get("passed", 0) < 6:
         return                                  # only C+/B+ quality zones arm
+    if ent.get("session") == "dead" or _event_blackout():
+        return                                  # it is a real entry signal now
     key = "armed:" + ent["zoneKey"]
     now = time.time()
     if key in _armed_mem["keys"] or now - _armed_mem["t"] < 60 * 60:
         return
+    try:
+        price, _src = tick_spot(broker=False)
+    except Exception:  # noqa: BLE001
+        price = None
+    if not price:
+        return
     _armed_mem["keys"] = (_armed_mem["keys"] + [key])[-60:]
     _armed_mem["t"] = now
+    d = 1 if ent["direction"] == "LONG" else -1
+    a = max(float(ent.get("atr") or 0.0), 0.5)
+    risk = 1.5 * a                              # stop distance = 1.5×ATR
+    entry = float(price)
+    sl = entry - d * risk
+    tp = entry + d * 2.0 * risk                 # 1:2 RR
     side = ent["zoneSide"]
     lbl = "Support" if side == "demand" else "Resistance"
     lo, hi = ent["entryZone"][0], ent["entryZone"][1]
-    quality = "B+" if ent["passed"] >= 7 else "C+"
-    _web_alert("ARMED", f"🎯 zone armed · {side} {lo:,.1f}–{hi:,.1f} · "
-                        f"{ent['passed']}/8 · waiting for retest")
-    _notify(f"🎯 ZONE ARMED — XAUUSD\n\n"
-            f"📍 Fresh {lbl} zone ({ent['direction']} bias)\n"
-            f"📐 Zone: {lo:,.1f} – {hi:,.1f}\n"
-            f"🧩 {ent['passed']}/8 confluence in place ({quality} quality if it holds)\n"
-            f"⏳ Waiting for price to return\n\n"
-            f"⚠️ Not an entry yet — signal card follows when price retests the zone\n\n"
-            f"💰 XAUUSD · 15M")
+    icon = "\U0001F7E2" if d == 1 else "\U0001F534"
+    _web_alert("MOMENTUM",
+               f"\u26A1 momentum {ent['direction'].lower()} @ {entry:,.1f} \u00b7 "
+               f"SL {sl:,.1f} \u00b7 TP {tp:,.1f} \u00b7 {ent['passed']}/8 armed zone "
+               f"{lo:,.1f}\u2013{hi:,.1f}")
+    _notify(f"{icon} MOMENTUM {ent['direction']} SIGNAL\n\n"
+            f"\U0001F4CA Timeframe: 15M\n"
+            f"\U0001F4B0 Symbol: XAUUSD\n"
+            f"\U0001F4CD Setup: Trend continuation \u2014 armed {lbl} zone "
+            f"{lo:,.1f}\u2013{hi:,.1f} ({ent['passed']}/8)\n\n"
+            f"\U0001F3AF Entry: {entry:,.2f} (market now)\n"
+            f"\U0001F6D1 SL: {sl:,.2f}\n"
+            f"\U0001F3AF TP: {tp:,.2f}\n\n"
+            f"\U0001F449 Trade now on your own broker\n\n"
+            f"\u2B50 SNR Rating: MOMENTUM ({ent['passed']}/8)\n"
+            f"\u26A0 Not a zone retest \u2014 momentum entry, smaller size")
 
 
 def maybe_setup_alert(ent):
@@ -1038,13 +1059,13 @@ def build_payload(tf, d, symbol="XAUUSD"):
             except Exception:  # noqa: BLE001
                 payload["sweep"] = None
                 payload["sweepStats"] = None
-            maybe_armed_alert(ent)       # arming heads-up: even during events
             blk = _event_blackout()
             if blk:
                 _postpone_note(ent, blk)
             else:
                 ensure_trade(ent)
                 maybe_setup_alert(ent)
+                maybe_momentum_alert(ent)   # ⚡ immediate entry at market on armed 6/8+ zones
                 maybe_zone_watch(ent)
                 if payload.get("sweep"):
                     maybe_sweep_alert(payload["sweep"])

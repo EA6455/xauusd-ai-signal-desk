@@ -969,6 +969,125 @@ def delta_view(candles, series_len=60):
         state=state, divergence=div)
 
 
+def _resolve_alt(pack, s, tp1r, tp2r):
+    """Resolve a scanned setup at ALTERNATIVE exit multiples (the scan itself
+    resolves at the production 1:2 profile). Same conservative rules: SL
+    first on same-bar, BE before TP2 on same-bar, timeout marks to market."""
+    hh, ll, cc = pack["h"], pack["l"], pack["c"]
+    n = pack["n"]
+    d = 1 if s["dir"] == "LONG" else -1
+    i, en, sl = s["i"], s["entry"], s["sl"]
+    risk = abs(en - sl)
+    if risk <= 0:
+        return None
+    end = min(n - 1, i + 96)
+    tp1, tp2 = en + d * tp1r * risk, en + d * tp2r * risk
+    hit1 = None
+    for k in range(i + 1, end + 1):
+        if (ll[k] <= sl) if d == 1 else (hh[k] >= sl):
+            return -1.0
+        if (hh[k] >= tp1) if d == 1 else (ll[k] <= tp1):
+            hit1 = k
+            break
+    if hit1 is None:
+        return d * (cc[end] - en) / risk
+    rem = 0.5 * tp1r
+    for m in range(hit1 + 1, end + 1):
+        be = (ll[m] <= en) if d == 1 else (hh[m] >= en)
+        hit2 = (hh[m] >= tp2) if d == 1 else (ll[m] <= tp2)
+        if be:
+            return rem
+        if hit2:
+            return rem + 0.5 * tp2r
+    return rem + 0.5 * max(0.0, d * (cc[end] - en) / risk)
+
+
+def research_variants(candles15, since_ts=None):
+    """24/7 research engine math. Production cohort plus challenger
+    variants (gating + exit alternatives), each with full-window AND
+    out-of-sample performance — 'oos' counts only setups triggered after
+    since_ts, i.e. bars the deployed strategy has never been tuned on.
+    That out-of-sample half is the learning loop."""
+    if not candles15 or len(candles15) < 400:
+        return None
+    setups, pack = _scan_setups(candles15)
+    d9, _d21 = delta_series(candles15)
+    hh, ll = pack["h"], pack["l"]
+
+    def _cont(s):
+        d = 1 if s["dir"] == "LONG" else -1
+        i = s["i"]
+        r_hi = r_lo = None
+        for idx in reversed(pack["sw_hi_idx"]):
+            if idx + SWING_K <= i:
+                r_hi = float(hh[idx]); break
+        for idx in reversed(pack["sw_lo_idx"]):
+            if idx + SWING_K <= i:
+                r_lo = float(ll[idx]); break
+        if r_hi is None or r_lo is None or r_hi <= r_lo:
+            return False
+        p = (s["entry"] - r_lo) / (r_hi - r_lo)
+        return (p >= 0.62) if d == 1 else (p <= 0.38)
+
+    def _st_r(rs):
+        if not rs:
+            return dict(n=0, win=None, avgR=None)
+        return dict(n=len(rs),
+                    win=round(sum(1 for r in rs if r > 0) / len(rs), 3),
+                    avgR=round(sum(rs) / len(rs), 3))
+
+    def _oos(ss):
+        return [s for s in ss if since_ts and s["t"] > since_ts]
+
+    cap = [s for s in setups if s["grade"] in ("A+", "B+")
+           and abs(s["entry"] - s["sl"]) <= MAX_STOP_DIST]
+    base = [s for s in cap if s["grade"] == "A+" or _cont(s)]
+    prod = [s for s in base if delta_align(d9, s["i"], s["dir"])]
+    variants = []
+
+    def add(name, ss):
+        rs = [s["r"] for s in ss if s.get("r") is not None]
+        variants.append(dict(
+            name=name, full=_st_r(rs),
+            oos=_st_r([s["r"] for s in _oos(ss)
+                       if s.get("r") is not None])))
+
+    add("no-delta-gate", base)
+    add("continuation-only+delta",
+        [s for s in cap if _cont(s) and delta_align(d9, s["i"], s["dir"])])
+    add("live-session+delta",
+        [s for s in prod if s["session"] in ("london", "ny-overlap", "ny-late")])
+
+    for lbl, a, b in (("exit 1:2.5", 1.0, 2.5), ("exit 0.75:1.5", 0.75, 1.5)):
+        rs = [x for x in (_resolve_alt(pack, s, a, b) for s in prod)
+              if x is not None]
+        rs_oos = []
+        for s in _oos(prod):
+            x = _resolve_alt(pack, s, a, b)
+            if x is not None:
+                rs_oos.append(x)
+        variants.append(dict(name=lbl, full=_st_r(rs), oos=_st_r(rs_oos)))
+
+    prod_rs = [s["r"] for s in prod if s.get("r") is not None]
+    prod_oos = _st_r([s["r"] for s in _oos(prod) if s.get("r") is not None])
+
+    # engine health: the other live signal types
+    try:
+        sw = [e for e in scan_sweeps(candles15) if e["grade"] in ("A+", "B+")]
+        swst = _st_r([e["r"] for e in sw if e.get("r") is not None])
+    except Exception:  # noqa: BLE001
+        swst = dict(n=0, win=None, avgR=None)
+    try:
+        rot = scan_daily_rotations(candles15)["trades"]
+        rotst = _st_r([e["r"] for e in rot if e.get("r") is not None])
+    except Exception:  # noqa: BLE001
+        rotst = dict(n=0, win=None, avgR=None)
+
+    return dict(bars=len(candles15), asOf=candles15[-1]["t"],
+                production=dict(full=_st_r(prod_rs), oos=prod_oos),
+                variants=variants, sweeps=swst, rotation=rotst)
+
+
 def cohort_stats(candles15):
     """Stats for the DELTA-CONFIRMED cohort — the only setups that earn a
     phone card: (A+ or A+/B+ continuation zone) AND the smoothed market

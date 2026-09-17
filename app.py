@@ -106,13 +106,14 @@ TG_CHATS = [c.strip() for c in TG_CHAT.split(",") if c.strip()]
 
 
 TG_TOPIC_FILE = os.path.join(BASE, "telegram_topics.json")
-# Baked-in topic map for the forum group (SIGNAL 59 / NEWS 60, verified
-# open on 2026-09-17). Render's free tier wipes the learned topic file on
-# every redeploy — without this default the map is lost and signal cards
-# silently fall back to the General topic. The on-disk file (learned or
+# Baked-in topic map for the forum group (SIGNAL 59 / NEWS 60 / DEVELOP 164,
+# verified open on 2026-09-17). Render's free tier wipes the learned topic
+# file on every redeploy — without this default the map is lost and signal
+# cards silently fall back to the General topic. The on-disk file (learned or
 # shipped) still overrides, and tg_topic_detect() still re-learns if a
 # topic ever goes away.
-DEFAULT_TG_TOPICS = {"signal": 59, "news": 60, "complete": True}
+DEFAULT_TG_TOPICS = {"signal": 59, "news": 60, "develop": 164,
+                     "complete": True}
 _TG_TOPICS = None
 
 
@@ -141,6 +142,8 @@ def _notify(text, cat="signal"):
     import urllib.request
     tops = _tg_topics()
     for chat in TG_CHATS:
+        if cat == "develop" and not chat.startswith("-100"):
+            continue          # develop digests: DEVELOP topic in the group only
         try:
             payload = {"chat_id": chat, "text": text}
             if chat.startswith("-100"):
@@ -167,7 +170,8 @@ def _notify(text, cat="signal"):
                     global _TG_TOPICS
                     # park on General (topic 1) and mark incomplete so
                     # tg_topic_detect() resumes re-learning new topic IDs
-                    _TG_TOPICS = {"signal": 1, "news": 1, "complete": False}
+                    _TG_TOPICS = {"signal": 1, "news": 1, "develop": 1,
+                                  "complete": False}
                     try:
                         with open(TG_TOPIC_FILE, "w") as f:
                             json.dump(_TG_TOPICS, f)
@@ -220,11 +224,14 @@ def tg_topic_detect(updates=None):
         tid = m.get("message_thread_id") or m["message_id"]
         if "news" in name:
             found["news"] = tid
+        elif any(w in name for w in ("develop", "research", "backtest", "lab")):
+            found["develop"] = tid
         elif any(w in name for w in ("signal", "trade", "entry", "snr", "alert")):
             found["signal"] = tid
     if not forum or not found:
         return None
     tops = dict(signal=found.get("signal", 1), news=found.get("news", 1),
+                develop=found.get("develop", 1),
                 complete=("signal" in found and "news" in found))
     _TG_TOPICS = tops
     try:
@@ -1699,6 +1706,93 @@ def _self_keepalive():
         pass
 
 
+# ------------------------------------------------------- 24/7 AI research
+_research_mem = {"t": 0.0}
+
+
+def research_cycle(force=False):
+    """One 24/7 AI research cycle: fresh 15m data -> backtest the production
+    strategy + challenger variants -> learn out-of-sample since session start
+    -> digest everything to the group's DEVELOP topic. Hourly, forever (the
+    Render self-ping keeps the service awake around the clock)."""
+    now = time.time()
+    if not force and now - _research_mem["t"] < 3300:
+        return
+    _research_mem["t"] = now
+    try:
+        d = data.get_candles("15m", force=True).get("candles")
+    except Exception:  # noqa: BLE001
+        d = None
+    if not d or len(d) < 400:
+        return
+    r = STATE.get("research") or {}
+    if not r.get("sessionStartT"):
+        r = dict(sessionStartT=d[-1]["t"], cycles=0, startedAt=int(now))
+    res = entries.research_variants(d, since_ts=r["sessionStartT"])
+    if not res:
+        return
+    r["cycles"] = r.get("cycles", 0) + 1
+    r["lastCycleT"] = int(now)
+    r["last"] = res
+    with STATE_LOCK:
+        STATE["research"] = r
+        _save_state()
+
+    def _fmt(st):
+        if not st or not st.get("n"):
+            return "n=0"
+        return (f"n={st['n']} · {round((st['win'] or 0) * 100)}% · "
+                f"{st['avgR']:+.2f}R")
+
+    p = res["production"]
+    lines = [
+        f"🔬 AI RESEARCH · cycle {r['cycles']} · {res['bars']:,} bars · 15m",
+        "",
+        "🏭 PRODUCTION (delta-confirmed 1:2 · 1000-pip cap)",
+        f"window: {_fmt(p['full'])}",
+        f"OOS since session start: {_fmt(p['oos'])}",
+        "",
+        "⚖ CHALLENGERS (window | out-of-sample)",
+    ]
+    for v in res["variants"]:
+        lines.append(f"• {v['name']}: {_fmt(v['full'])} | {_fmt(v['oos'])}")
+    lines += [
+        "",
+        "🩺 ENGINE HEALTH",
+        f"• sweeps A+/B+: {_fmt(res['sweeps'])}",
+        f"• rotation flips: {_fmt(res['rotation'])}",
+    ]
+    cands = []
+    po = p["oos"]
+    if po.get("n") and po.get("avgR") is not None:
+        for v in res["variants"]:
+            vo = v["oos"]
+            if vo.get("n", 0) >= 3 and vo.get("avgR") is not None and \
+                    vo["avgR"] > po["avgR"] + 0.15:
+                cands.append(f"{v['name']} (oos {vo['avgR']:+.2f}R vs "
+                             f"prod {po['avgR']:+.2f}R · n={vo['n']})")
+    if cands:
+        lines += ["", "🔬 CANDIDATES — beating production out-of-sample:"]
+        lines += [f"  → {c}" for c in cands]
+    else:
+        lines += ["", "🔬 candidates: none yet (needs OOS n≥3 and +0.15R edge)"]
+    _notify("\n".join(lines), cat="develop")
+    return res
+
+
+def _research_loop():
+    """Always-on research daemon: first cycle 3 min after boot (caches warm),
+    then hourly — 24/7 non-stop. Only the flock-owning worker runs it."""
+    time.sleep(180)
+    while True:
+        try:
+            research_cycle()
+        except Exception:  # noqa: BLE001
+            import traceback
+            traceback.print_exc()
+        time.sleep(3600)
+
+
 def _background_loop():
     while True:
         try:
@@ -1761,6 +1855,7 @@ def start_background():
     except Exception:  # noqa: BLE001  — another worker already owns the loop
         return
     threading.Thread(target=_background_loop, daemon=True).start()
+    threading.Thread(target=_research_loop, daemon=True).start()
 
 
 # ------------------------------------------------------------- trader note
@@ -2178,9 +2273,12 @@ def pwa_icon(name):
 
 @app.route("/api/health")
 def health():
+    r = STATE.get("research") or {}
     return jsonify(ok=True, tfs=list(data.TFS),
                    telegram=bool(TG_TOKEN and TG_CHAT),
-                   topics=_tg_topics())
+                   topics=_tg_topics(),
+                   research=dict(cycles=r.get("cycles", 0),
+                                 lastCycleT=r.get("lastCycleT")))
 
 
 # Start the realtime feed + background loop at import time so WSGI servers

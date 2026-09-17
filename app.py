@@ -691,53 +691,18 @@ def maybe_setup_alert(ent, elite_stats=None):
         _save_state()
     if not phone:
         return
-    # phone message: the classic SNR signal card (ONE message per zone+grade)
-    side = ent.get("zoneSide") or ("demand" if ent["direction"] == "LONG" else "supply")
-    setup_lbl = "Support" if side == "demand" else "Resistance"
+    # phone message: MINIMAL by request — direction, entry, SL, TPs only.
+    # The full trader-flow detail (zone, rejection, confirmation, delta,
+    # zone type, cohort stats) stays visible in the web UI's SNR Entry card.
     icon = "🟢" if ent["direction"] == "LONG" else "🔴"
-    warn = ""            # phone cards are A+ or elite-continuation only now —
-                         # B+/C+ mid/deep pullbacks stay web-feed watch lines
-    htf_line = ""
-    if ent.get("htf"):
-        h = ent["htf"]
-        htf_line = (f"\n📐 HTF: {h['tf']} "
-                    f"{'demand' if side == 'demand' else 'supply'} "
-                    f"{h['bottom']:,.0f}–{h['top']:,.0f}")
-    # trader-flow checklist (the 5-SOP: zone -> rejection -> confirmation ->
-    # setup -> entry) — the card reads like an SNR trader executing the trade
-    lo_z, hi_z = ent["entryZone"][0], ent["entryZone"][1]
-    checks = ent.get("checks") or []
-    rej_lbl = "tapped & holding" if (checks and checks[3].get("ok")) else "retest pending"
-    conf_lbl = "engulf / pin candle" if (checks and checks[5].get("ok")) else "no candle confirm"
-    zone_type = ("CONTINUATION · shallow pullback in a strong leg"
-                 if ent.get("contZone") else
-                 "retracement zone · deeper pullback")
-    elite_tag = " · 🔥 ELITE" if elite else ""
-    who = "buyers" if ent["direction"] == "LONG" else "sellers"
-    hist = ""
-    st = elite_stats or {}
-    if st.get("setups"):
-        hist = (f"\n📈 Delta-confirmed cohort: "
-                f"{round((st.get('winRate') or 0) * 100):.0f}%"
-                f" win · {st.get('avgR', 0):+.2f}R avg · n={st['setups']}"
-                f" (60d)")
+    act = "BUY" if ent["direction"] == "LONG" else "SELL"
+    tag = " · 🔥" if elite else ""
     _notify(
-        f"{icon} {grade} {ent['direction']} SIGNAL{elite_tag}\n\n"
-        f"📊 Timeframe: 15M\n"
-        f"💰 Symbol: XAUUSD\n"
-        f"📍 Setup: {setup_lbl}{htf_line}\n\n"
-        f"🧭 SNR trader checklist\n"
-        f"✅ ZONE — fresh {setup_lbl.lower()} {lo_z:,.1f}–{hi_z:,.1f}\n"
-        f"✅ REJECTION — {rej_lbl}\n"
-        f"✅ CONFIRMATION — {conf_lbl}\n"
-        f"✅ DELTA — {who} in control (order flow confirmed)\n"
-        f"📐 Zone type: {zone_type}{hist}\n\n"
-        f"🎯 Entry: {ent['entry']:,.2f} (at confirmation close)\n"
-        f"🛑 SL: {ent['sl']:,.2f} (beyond zone)\n"
-        f"🎯 TP1: {ent['tp1']:,.2f} (half off · 1:1 RR)\n"
-        f"🎯 TP2: {ent['tp2']:,.2f} (runner · 1:2 RR)\n\n"
-        f"👉 Trade now on your own broker\n\n"
-        f"⭐ SNR Rating: {grade}{warn}")
+        f"{icon} {act} · XAUUSD{tag}\n\n"
+        f"🎯 Entry: {ent['entry']:,.2f}\n"
+        f"🛑 SL: {ent['sl']:,.2f}\n"
+        f"🎯 TP1: {ent['tp1']:,.2f}\n"
+        f"🎯 TP2: {ent['tp2']:,.2f} (2R)")
     track_signal(grade, key, ent["direction"], ent["entry"], ent["sl"],
                  ent["tp1"], ent["tp2"])
 

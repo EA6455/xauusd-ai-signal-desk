@@ -77,7 +77,7 @@ STATE_LOCK = threading.Lock()
 STATE = dict(alerts=[], priceAlerts=[], lastSig={}, lastPrice=None,
              liveTrade=None, tradeHistory=[], signalTrades=[], lastSigT={},
              lastSetup=None, lastSetupT=0.0, eventAlerted=[], newsSeen=None,
-             brokerOffset=0.0)
+             brokerOffset=0.0, aiTrades=[])
 try:
     with open(STATE_PATH) as f:
         _loaded = json.load(f)
@@ -2913,18 +2913,165 @@ def _ai_trader_post(sig):
                 cat="signal")
         return
     arrow = "\U0001F7E2 BUY" if sig["direction"] == "buy" else "\U0001F534 SELL"
+    conf_line = (f"\u26a1 {sig['confluence']}\n\n"
+                 if sig.get("confluence") else "\n")
     _notify(
         f"\U0001F9E0 AI TRADER · {m}\n\n"
         f"{arrow} · XAUUSD · {sig.get('style')}\n\n"
         f"\U0001F3AF Entry {sig['entry']:,.2f}\n"
         f"\U0001F6D1 SL {sig['stop']:,.2f}\n"
         f"\U0001F3C1 TP {sig['target']:,.2f}\n\n"
+        + conf_line +
         f"R:R 1:{sig['rr']:g} · risk {sig['riskAtr']:g}×ATR · "
         f"confidence {round(sig['conf'] * 100)}%\n"
         f"\U0001F5E3 {sig.get('thesis') or '—'}\n"
         f"\u274C dead if: {sig.get('invalidation') or '—'}\n\n"
         f"\u26a0 AI research opinion — not the auto-trade engine",
         cat="signal")
+
+
+AI_TRADE_MAX = 50          # tracked AI calls kept (newest first)
+AI_FILL_BARS = 48          # bars a limit/stop entry gets to fill (12h)
+AI_HOLD_BARS = 48          # bars after fill before mark-to-market (12h)
+
+
+def _ai_trader_record(sig):
+    """Track an actionable AI call so the desk can score it honestly.
+    Deduped (same open call re-pressed within 30min is skipped), capped,
+    persisted to the shared cloud state."""
+    trades = STATE.setdefault("aiTrades", [])
+    last = trades[0] if trades else None
+    if (last and last.get("status") == "open"
+            and last.get("direction") == sig["direction"]
+            and abs((last.get("entry") or 0) - sig["entry"]) < 0.05
+            and time.time() - (last.get("t") or 0) < 1800):
+        return
+    with STATE_LOCK:
+        trades.insert(0, dict(
+            t=sig["t"], direction=sig["direction"], entry=sig["entry"],
+            stop=sig["stop"], target=sig["target"], rr=sig["rr"],
+            conf=sig["conf"], style=sig.get("style"), spot=sig.get("spot"),
+            model=sig.get("model"), thesis=(sig.get("thesis") or "")[:200],
+            status="open", fillT=None, exitT=None, r=None))
+        del trades[AI_TRADE_MAX:]
+        _save_state()
+    cloud_save(force=True)
+
+
+def _ai_trader_resolve():
+    """Score open AI calls against REAL 15m bars. Conservative rules,
+    same as the engine's backtests: entry fills on touch (marketable
+    entries fill on the first bar after the call); if the fill bar can
+    also be a stop-out it IS one; stop before target on the same bar is
+    a loss; no fill in 12h or no exit in 12h after fill = marked to
+    market. Wins pay the call's own R:R."""
+    try:
+        candles = data.get_candles("15m").get("candles") or []
+    except Exception:  # noqa: BLE001
+        return
+    if len(candles) < 30:
+        return
+    changed = False
+    for tr in [t for t in (STATE.get("aiTrades") or [])
+               if t.get("status") == "open"]:
+        bars = [c for c in candles if c["t"] >= (tr.get("t") or 0) + 900]
+        if not bars:
+            continue                          # call newer than the data
+        buy = tr["direction"] == "buy"
+        entry, stop, target = (float(tr["entry"]), float(tr["stop"]),
+                               float(tr["target"]))
+        risk = abs(entry - stop) or 1.0
+        spot = float(tr.get("spot") or entry)
+        marketable = (entry <= spot) if buy else (entry >= spot)
+        status = None
+        r = None
+        filled = False
+        j = 0                                 # bars since fill
+        for i, c in enumerate(bars):
+            hi, lo = float(c["h"]), float(c["l"])
+            if not filled:
+                if buy:                  # limit/market fills on a low
+                    hit = (lo <= entry) if marketable else (hi >= entry)
+                else:                    # stop entries fill on a break
+                    hit = (hi >= entry) if marketable else (lo <= entry)
+                if hit:
+                    filled = True
+                    tr["fillT"] = c["t"]
+                    if (lo <= stop if buy else hi >= stop):
+                        status, r = "loss", -1.0
+                    elif (hi >= target if buy else lo <= target):
+                        status, r = "win", float(tr.get("rr") or 0)
+                elif i >= AI_FILL_BARS:
+                    status, r = "nofill", 0.0
+                if status:
+                    break
+                continue
+            j += 1
+            if (lo <= stop if buy else hi >= stop):
+                status, r = "loss", -1.0
+                break
+            if (hi >= target if buy else lo <= target):
+                status, r = "win", float(tr.get("rr") or 0)
+                break
+            if j >= AI_HOLD_BARS:
+                close = float(c["c"])
+                r = ((close - entry) if buy else (entry - close)) / risk
+                status = "timeout"
+                break
+        if status:
+            tr["status"] = status
+            tr["r"] = round(r, 2)
+            tr["exitT"] = int(time.time())
+            changed = True
+            if status in ("win", "loss", "timeout"):
+                st = _ai_trader_stats()
+                emoji = {"win": "\u2705", "loss": "\u274c",
+                         "timeout": "\u23f1"}[status]
+                _notify(
+                    f"\U0001F3AF AI TRADER CALL {status.upper()} {emoji}\n\n"
+                    f"{tr['direction'].upper()} {entry:,.2f} \u00b7 "
+                    f"SL {stop:,.2f} \u00b7 TP {target:,.2f}\n"
+                    f"result {tr['r']:+.2f}R \u00b7 record: {st['n']} "
+                    f"calls, {st['winPct'] or 0}% win, "
+                    f"{st['avgR'] or 0:+.2f}R avg", cat="signal")
+    if changed:
+        with STATE_LOCK:
+            _save_state()
+        cloud_save(force=True)
+
+
+def _ai_trader_stats():
+    """Honest scorecard: only resolved calls count (open + no-fill
+    excluded)."""
+    rs = [t.get("r") for t in (STATE.get("aiTrades") or [])
+          if t.get("status") in ("win", "loss", "timeout")
+          and isinstance(t.get("r"), (int, float))]
+    if not rs:
+        return dict(n=0, winPct=None, avgR=None)
+    return dict(n=len(rs),
+                winPct=round(100 * sum(1 for r in rs if r > 0) / len(rs)),
+                avgR=round(sum(rs) / len(rs), 2))
+
+
+def _ai_trades_merge(remote, local):
+    """Cloud merge for tracked AI calls: union by call key; a resolved
+    copy beats an open one; local wins ties; newest first, cap 50."""
+    def key(t):
+        return f"{t.get('t')}|{t.get('direction')}|{t.get('entry')}"
+
+    def rank(t):
+        return 1 if t.get("status") in ("win", "loss", "timeout",
+                                        "nofill") else 0
+
+    m = {}
+    for t in (remote or []):
+        m[key(t)] = t
+    for t in (local or []):
+        k = key(t)
+        if k not in m or rank(t) >= rank(m[k]):
+            m[k] = t
+    return sorted(m.values(), key=lambda t: t.get("t") or 0,
+                  reverse=True)[:AI_TRADE_MAX]
 
 
 def ai_trader(force=False, auto=False):
@@ -2975,6 +3122,21 @@ def ai_trader(force=False, auto=False):
                               "standing aside", invalidation="")
         sig.update(t=int(time.time()), provider=p["name"], model=model,
                    spot=round(spot, 2), atr=atr)
+        try:                                   # confluence with the desk
+            _d = get_ai_desk() or {}
+            _cl = str(((_d.get("consensus") or {}).get("label"))
+                      or "").lower()
+            if sig["direction"] == "buy" and "bull" in _cl:
+                sig["confluence"] = "8-model consensus bullish"
+            elif sig["direction"] == "sell" and "bear" in _cl:
+                sig["confluence"] = "8-model consensus bearish"
+        except Exception:  # noqa: BLE001
+            pass
+        if sig["direction"] != "none":
+            try:
+                _ai_trader_record(sig)
+            except Exception:  # noqa: BLE001  — never kill the call
+                pass
         _ai_trader_mem.update(t=sig["t"], sig=sig, lastErr=None)
         if force or (auto and sig["direction"] != "none"):
             pk = f"{sig['direction']}:{sig.get('entry')}:{sig.get('stop')}"
@@ -3184,6 +3346,10 @@ def _background_loop():
             fundamentals.snapshot()           # keep news/macro/calendar caches
         except Exception:  # noqa: BLE001    # warm so user requests never wait
             pass
+        try:
+            _ai_trader_resolve()              # score open AI-trader calls
+        except Exception:  # noqa: BLE001
+            pass
         for tf in data.TFS:
             try:
                 refresh(tf)
@@ -3289,6 +3455,8 @@ def cloud_load():
                             if k not in dead]
             if blob.get("autoexec") and not STATE.get("autoexec"):
                 STATE["autoexec"] = blob["autoexec"]
+            STATE["aiTrades"] = _ai_trades_merge(
+                blob.get("aiTrades"), STATE.get("aiTrades"))
             _save_state()
         return True
     except Exception:  # noqa: BLE001  — 404 (nothing saved yet) or offline
@@ -3361,7 +3529,9 @@ def cloud_save(force=False):
                      rae.get("totalTrades", 0)) else rae
         blob = dict(mt5=list(merged.values())[:20],
                     autoexec=ae,
-                    mt5_deleted=sorted(dead)[-50:])
+                    mt5_deleted=sorted(dead)[-50:],
+                    aiTrades=_ai_trades_merge(remote.get("aiTrades"),
+                                              STATE.get("aiTrades")))
         body = dict(message="state sync",
                     content=base64.b64encode(
                         json.dumps(blob).encode()).decode())
@@ -3978,13 +4148,20 @@ def api_mt5_delete(aid):
     return jsonify(ok=True)
 
 
+def _ai_trader_payload(sig=None):
+    """Panel payload: latest call + tracked history + honest stats."""
+    s = sig if sig is not None else _ai_trader_mem.get("sig")
+    if s:
+        s = dict(s, age=int(time.time() - s.get("t", 0)))
+    return jsonify(sig=s, busy=_ai_trader_mem["busy"],
+                   err=_ai_trader_mem.get("lastErr"),
+                   trades=(STATE.get("aiTrades") or [])[:8],
+                   stats=_ai_trader_stats())
+
+
 @app.route("/api/ai/trader")
 def api_ai_trader_get():
-    sig = _ai_trader_mem.get("sig")
-    if sig:
-        sig = dict(sig, age=int(time.time() - sig.get("t", 0)))
-    return jsonify(sig=sig, busy=_ai_trader_mem["busy"],
-                   err=_ai_trader_mem.get("lastErr"))
+    return _ai_trader_payload()
 
 
 @app.route("/api/ai/trader", methods=["POST"])
@@ -3993,7 +4170,7 @@ def api_ai_trader_run():
     if sig is None:
         return jsonify(error=_ai_trader_mem.get("lastErr")
                        or "AI trader unavailable"), 503
-    return jsonify(sig=dict(sig, age=0))
+    return _ai_trader_payload(sig=sig)
 
 
 @app.route("/api/trades")

@@ -2349,9 +2349,29 @@ const INITIAL = {{ payload|tojson }};
     const s = j && j.sig;
     const btn = $('aiTraderBtn');
     if(btn) btn.disabled = !!j.busy;
+    const hist = (j && j.trades) || [];
+    const st = (j && j.stats) || {};
+    const stHtml = st.n
+      ? '<div class="muted small" style="margin:8px 0 2px">📋 record: <b>' + st.n
+        + '</b> calls · <b>' + st.winPct + '%</b> win · <b>'
+        + (st.avgR >= 0 ? '+' : '') + st.avgR + 'R</b> avg</div>'
+      : '<div class="muted small" style="margin:8px 0 2px">📋 every call is tracked &amp; scored automatically — no resolved calls yet</div>';
+    const badge = t => t.status === 'win' ? '✅ +' + (+t.r).toFixed(1) + 'R'
+      : t.status === 'loss' ? '❌ −' + Math.abs(+t.r).toFixed(1) + 'R'
+      : t.status === 'timeout' ? '⏱ ' + ((+t.r >= 0 ? '+' : '') + (+t.r).toFixed(1) + 'R')
+      : t.status === 'nofill' ? '— no fill'
+      : '○ open';
+    const histHtml = hist.length ? '<div style="margin-top:6px">'
+      + hist.slice(0, 5).map(t =>
+        '<div class="small" style="display:flex; gap:8px; align-items:baseline; padding:2px 0">'
+        + '<span class="mono" style="flex:none;min-width:56px;color:' + (t.direction === 'buy' ? '#22c55e' : '#ef4444') + '">'
+        + (t.direction === 'buy' ? 'BUY' : 'SELL') + ' ' + (+t.entry).toFixed(0) + '</span>'
+        + '<span class="mono" style="flex:none">' + badge(t) + '</span>'
+        + '<span class="muted" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + (t.thesis || '') + '</span>'
+        + '</div>').join('') + '</div>' : '';
     if(!s){
       $('aiTraderSum').textContent = (j && j.err) ? '⚠ ' + j.err : 'warming up…';
-      $('aiTraderBody').innerHTML = '<div class="muted small">no call yet — press the button below</div>';
+      $('aiTraderBody').innerHTML = '<div class="muted small">no call yet — press the button below</div>' + stHtml + histHtml;
       return;
     }
     const age = (s.age != null) ? (s.age < 90 ? s.age + 's old' : Math.round(s.age / 60) + 'm old') : '';
@@ -2359,7 +2379,9 @@ const INITIAL = {{ payload|tojson }};
       $('aiTraderSum').textContent = 'stand aside · ' + age;
       $('aiTraderBody').innerHTML = '<div class="mt5-acc"><b>⚪ STAND ASIDE</b>'
         + '<span class="muted">' + (s.thesis || 'no A+ location right now') + '</span>'
-        + '<span class="muted small">' + (s.model || '') + ' · ' + age + '</span></div>';
+        + (s.confluence ? '<span class="muted">⚡ ' + s.confluence + '</span>' : '')
+        + '<span class="muted small">' + (s.model || '') + ' · ' + age + '</span></div>'
+        + stHtml + histHtml;
       return;
     }
     $('aiTraderSum').textContent = s.direction.toUpperCase() + ' · conf '
@@ -2373,9 +2395,11 @@ const INITIAL = {{ payload|tojson }};
       + '<span class="muted">R:R 1:' + (s.rr != null ? s.rr : '—') + ' · risk '
       + (s.riskAtr != null ? s.riskAtr : '—') + '×ATR · confidence '
       + Math.round((s.conf || 0) * 100) + '%</span>'
+      + (s.confluence ? '<span class="muted">⚡ ' + s.confluence + '</span>' : '')
       + (s.thesis ? '<span class="muted">🗣 ' + s.thesis + '</span>' : '')
       + (s.invalidation ? '<span class="muted">❌ dead if: ' + s.invalidation + '</span>' : '')
-      + '<span class="muted small">' + (s.provider || '') + ' · ' + (s.model || '') + ' · ' + age + '</span></div>';
+      + '<span class="muted small">' + (s.provider || '') + ' · ' + (s.model || '') + ' · ' + age + '</span></div>'
+      + stHtml + histHtml;
   }
   async function aiTraderLoad(){
     try{
@@ -2390,7 +2414,7 @@ const INITIAL = {{ payload|tojson }};
       const r = await apiFetch('/api/ai/trader', {method: 'POST'});
       const j = await r.json();
       if(!r.ok) throw new Error(j.error || 'failed');
-      aiTraderRender({sig: j.sig, busy: false});
+      aiTraderRender(j);
       toast('AI trader call ready');
     }catch(e){ toast('⚠ ' + (e.message || 'AI trader failed')); }
     finally{ b.disabled = false; b.textContent = 'Ask the AI trader now'; }

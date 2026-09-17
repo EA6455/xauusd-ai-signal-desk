@@ -78,8 +78,13 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "2.9.1"
+SYSTEM_VERSION = "2.9.2"
 SYSTEM_CHANGELOG = {
+    "2.9.2": [
+        "Price engine: displayed spot recomputed at 4Hz in the background "
+        "— the live stream now pushes at tape density instead of waiting "
+        "on slow REST quotes between updates",
+    ],
     "2.9.1": [
         "Realtime price tape rebuilt as a 4-stream aggregate (OKX PAXG + "
         "OKX XAUT + Binance + Bybit) — TradingView-style, median-merged, "
@@ -3767,6 +3772,23 @@ def _desk_update_loop():
         time.sleep(DESK_UPDATE_S)
 
 
+_price_engine_on = {"on": False}
+
+
+def _price_engine():
+    """Background price engine: recompute the displayed spot at ~4Hz so
+    every realtime client (SSE + long-poll) reads a hot cache instead of
+    each blocking on the slow REST anchor calls (Yahoo / gold-api can
+    take seconds). The engine absorbs that latency once; the streams
+    stay zero-delay."""
+    while True:
+        try:
+            _tick_spot_raw(0.0)             # recompute + refresh _tick_mem
+        except Exception:  # noqa: BLE001
+            pass
+        time.sleep(0.25)
+
+
 def start_background():
     global _bg_started
     wsfeed.start()                      # real-time websocket gold feed
@@ -3787,6 +3809,9 @@ def start_background():
     threading.Thread(target=_announce_version, daemon=True).start()
     threading.Thread(target=_desk_update_loop, daemon=True).start()
     threading.Thread(target=_mtf_loop, daemon=True).start()
+    if not _price_engine_on["on"]:
+        _price_engine_on["on"] = True
+        threading.Thread(target=_price_engine, daemon=True).start()
 
 
 # ------------------------------------------------- cross-deploy persistence
@@ -4304,7 +4329,7 @@ def api_stream():
         last_yield = time.time()
         while True:
             try:
-                p, src = tick_spot(max_age=0.05)
+                p, src = tick_spot(max_age=3.0)   # hot cache: price engine
             except Exception:  # noqa: BLE001
                 p, src = None, None
             now = time.time()
@@ -4318,8 +4343,9 @@ def api_stream():
             if now - last_yield > 14:     # idle keepalive for proxies
                 last_yield = now
                 yield ": keepalive\n\n"
-            # wake the INSTANT the exchange book changes (event-driven push)
-            wsfeed.wait_for_change(15.0)
+            # wake on any tape tick; the 0.5s cap also catches the price
+            # engine's refresh — the stream can never sit on a stale price
+            wsfeed.wait_for_change(0.5)
     resp = Response(gen(), mimetype="text/event-stream")
     resp.headers["Cache-Control"] = "no-cache"
     resp.headers["X-Accel-Buffering"] = "no"
@@ -4337,7 +4363,7 @@ def api_wait():
         last = 0.0
     deadline = time.time() + 20.0
     while True:
-        p, src = tick_spot(max_age=0.05)
+        p, src = tick_spot(max_age=3.0)          # hot cache: price engine
         now = time.time()
         if p is not None and abs(p - last) >= 0.01:
             return jsonify(price=round(p, 2), source=src, t=int(now),

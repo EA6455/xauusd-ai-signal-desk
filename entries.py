@@ -856,23 +856,133 @@ def zone_radar(candles15, candles_1h=None, price=None, max_zones=9):
     return out[:max_zones]
 
 
+# ---------------------------------------------------- market delta
+# Volume-weighted order-flow proxy, normalized to be scale-free:
+#   per bar: delta = vol × (2×(close−low)/(high−low) − 1)
+#            norm  = delta / mean(vol, last 20 bars incl. current)  (causal)
+# The EMA(9) of `norm` is the smooth pressure line, EMA(21) the trend.
+# Normalization is what makes pro delta panels look calm: a high-volume
+# spike can no longer dominate the scale.
+DELTA_VOL_WINDOW = 20
+DELTA_EMA_FAST = 9
+DELTA_EMA_SLOW = 21
+DELTA_STRONG = 0.15          # |EMA9| above this = strong pressure
+
+
+def _delta_parts(candles):
+    """Shared delta math: (raw, vol, mv, norm, d9, d21) or None."""
+    if not candles or len(candles) < 30:
+        return None
+    n = len(candles)
+    hh = np.array([float(k["h"]) for k in candles])
+    ll = np.array([float(k["l"]) for k in candles])
+    cc = np.array([float(k["c"]) for k in candles])
+    vv = np.array([float(k.get("v") or 0.0) for k in candles])
+    rng = hh - ll
+    frac = np.where(rng > 0, (cc - ll) / np.where(rng > 0, rng, 1.0), 0.5)
+    vol = np.where(vv > 0, vv, 1.0)
+    raw = vol * (2.0 * frac - 1.0)
+    csum = np.cumsum(vol)
+    offs = np.concatenate((np.zeros(DELTA_VOL_WINDOW),
+                           csum[:n - DELTA_VOL_WINDOW])) \
+        if n > DELTA_VOL_WINDOW else np.zeros(n)
+    winsz = np.minimum(np.arange(n) + 1, DELTA_VOL_WINDOW)
+    mv = (csum - offs) / winsz
+    norm = raw / np.maximum(mv, 1e-9)
+
+    def _ema(xs, span):
+        out = np.empty(len(xs))
+        e = xs[0]
+        a = 2.0 / (span + 1.0)
+        for i in range(len(xs)):
+            e = a * xs[i] + (1 - a) * e
+            out[i] = e
+        return out
+
+    return raw, vol, mv, norm, _ema(norm, DELTA_EMA_FAST), \
+        _ema(norm, DELTA_EMA_SLOW)
+
+
+def delta_series(candles):
+    """(ema9, ema21) of the volume-normalized delta — both causal numpy
+    arrays, or (None, None) when there is not enough data."""
+    p = _delta_parts(candles)
+    return (None, None) if p is None else (p[4], p[5])
+
+
+def delta_align(d9, i, direction):
+    """True when the smooth delta pressure agrees with the trade direction."""
+    if d9 is None or i is None or i >= len(d9):
+        return False
+    e9 = float(d9[i])
+    return e9 > 0 if direction == "LONG" else e9 < 0
+
+
+def delta_view(candles, series_len=60):
+    """Payload for the UI's Market Delta card (smooth line + histogram)."""
+    p = _delta_parts(candles)
+    if p is None:
+        return None
+    raw, vol, mv, norm, d9, d21 = p
+    n = len(candles)
+    hh = np.array([float(k["h"]) for k in candles])
+    ll = np.array([float(k["l"]) for k in candles])
+    w0 = max(0, n - series_len)
+    rw = raw[w0:]
+    tot = float(np.abs(rw).sum())
+    e9, e21 = float(d9[-1]), float(d21[-1])
+    if e9 > 0.05 and e9 >= e21:
+        state = "BUYERS IN CONTROL"
+    elif e9 < -0.05 and e9 <= e21:
+        state = "SELLERS IN CONTROL"
+    elif e9 > 0:
+        state = "BUYERS FADING"
+    else:
+        state = "SELLERS FADING"
+    # divergence: price higher highs but delta lower highs (or mirror)
+    pw = min(30, n)
+    half = pw // 2
+    d9w = d9[-pw:]
+    ph1 = float(hh[-pw:][:half].max()); ph2 = float(hh[-pw:][half:].max())
+    dh1 = float(d9w[:half].max()); dh2 = float(d9w[half:].max())
+    pl1 = float(ll[-pw:][:half].min()); pl2 = float(ll[-pw:][half:].min())
+    dl1 = float(d9w[:half].min()); dl2 = float(d9w[half:].min())
+    div = None
+    if ph2 > ph1 and dh2 < dh1 and e9 < float(d9w[0]):
+        div = "bearish — price up, delta down"
+    elif pl2 < pl1 and dl2 > dl1 and e9 > float(d9w[0]):
+        div = "bullish — price down, delta up"
+    s9 = d9[w0:]
+    mx = float(np.abs(s9).max()) or 1.0
+    return dict(
+        series=[round(float(x) / mx, 4) for x in s9],
+        hist=[round(float(np.clip(x, -1, 1)), 4) for x in norm[w0:]],
+        ema9=round(e9, 3), ema21=round(e21, 3),
+        strong=bool(abs(e9) >= DELTA_STRONG),
+        buyPct=round(0.5 + 0.5 * (float(rw.sum()) / tot if tot > 0 else 0.0), 3),
+        cum=round(float(rw.sum()), 1),
+        state=state, divergence=div)
+
+
 def cohort_stats(candles15):
-    """Stats for the ELITE cohort — A+/B+ retests of CONTINUATION zones
-    (entry in the direction-extreme 38% of the causal dealing range).
-    Backtest: 83% win · +0.65R at the 1:2 profile (n=12, 60d). These are
-    the only B+ setups that earn a phone card."""
+    """Stats for the DELTA-CONFIRMED cohort — the only setups that earn a
+    phone card: (A+ or A+/B+ continuation zone) AND the smoothed market
+    delta pushing the same way at entry. Backtest: 92% win · +0.76R at the
+    1:2 profile (n=13, 60d). Everything else is watch-only."""
     if not candles15 or len(candles15) < 200:
         return None
-    key = f"elite:{len(candles15)}:{candles15[-1]['t']}"
-    if _stats_cache.get("ekey") == key:
-        return _stats_cache["estats"]
+    key = f"delta:{len(candles15)}:{candles15[-1]['t']}"
+    if _stats_cache.get("dkey") == key:
+        return _stats_cache["dstats"]
     setups, pack = _scan_setups(candles15)
+    d9, _d21 = delta_series(candles15)
     hh, ll = pack["h"], pack["l"]
     sel = []
     for s in setups:
         if s["grade"] not in ("A+", "B+"):
             continue
         d = 1 if s["dir"] == "LONG" else -1
+        cont = False
         i = s["i"]
         r_hi = r_lo = None
         for idx in reversed(pack["sw_hi_idx"]):
@@ -881,18 +991,19 @@ def cohort_stats(candles15):
         for idx in reversed(pack["sw_lo_idx"]):
             if idx + SWING_K <= i:
                 r_lo = float(ll[idx]); break
-        if r_hi is None or r_lo is None or r_hi <= r_lo:
-            continue
-        p = (s["entry"] - r_lo) / (r_hi - r_lo)
-        if (p >= 0.62) if d == 1 else (p <= 0.38):
+        if r_hi is not None and r_lo is not None and r_hi > r_lo:
+            p = (s["entry"] - r_lo) / (r_hi - r_lo)
+            cont = (p >= 0.62) if d == 1 else (p <= 0.38)
+        base = (s["grade"] == "A+") or cont
+        if base and delta_align(d9, i, s["dir"]):
             sel.append(s)
     w = sum(1 for s in sel if s["outcome"] == "win")
     r_sum = sum(s["r"] or 0.0 for s in sel)
     stats = dict(setups=len(sel), wins=w,
                  winRate=round(w / len(sel), 3) if sel else None,
                  avgR=round(r_sum / len(sel), 3) if sel else None)
-    _stats_cache["ekey"] = key
-    _stats_cache["estats"] = stats
+    _stats_cache["dkey"] = key
+    _stats_cache["dstats"] = stats
     return stats
 
 

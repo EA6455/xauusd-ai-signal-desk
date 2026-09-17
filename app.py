@@ -638,34 +638,39 @@ def maybe_setup_alert(ent, elite_stats=None):
     """Fire an alert on SNR retests, once per ZONE+GRADE (a setup that stays
     live for hours must not re-alert every 15 minutes).
 
-    v3 gating (1:2 RR backtest): phone cards only for cohorts that WIN at
-    1:2 — 🔥 ELITE (A+/B+ continuation zones, 83%/+0.65R) and plain A+
-    (71%/+0.50R). B+/C+ mid/deep-pullback zones lose at 1:2 (42-44%) so
-    they stay web-feed watch lines — visible, honestly labeled, no card."""
+    v3 gating (1:2 RR backtest): phone cards only for the DELTA-CONFIRMED
+    cohort — (A+ or A+/B+ continuation zone, 83%/+0.65R) AND the smoothed
+    market delta pushing the same way at entry: 92% win · +0.76R (n=13).
+    Delta-against A+/elite setups (40-50%) and B+/C+ mid/deep zones (42-44%)
+    stay web-feed watch lines — visible, honestly labeled, no card."""
     if not ent or not ent.get("touching"):
         return
     grade = ent.get("grade")
     if grade not in ("A+", "B+", "C+"):
         return
     elite = bool(ent.get("contZone")) and grade in ("A+", "B+")
-    phone = elite or grade == "A+"
+    base = elite or grade == "A+"
+    phone = base and bool(ent.get("deltaOK"))
     key = (ent.get("zoneKey") or f"{ent['direction']}:{ent['barTime']}") + ":" + grade
     with STATE_LOCK:
         if STATE.get("lastSetup") == key:
             return
         STATE["lastSetup"] = key
         if not phone:
-            # below the 1:2 quality bar — web-feed watch line only, no card
-            zt = ("CONTINUATION" if ent.get("contZone")
-                  else "mid/deep pullback")
+            # below the quality bar — web-feed watch line only, no card
+            if base:
+                why = ("delta not confirmed — order flow "
+                       f"{ent.get('deltaState') or 'flat'} · delta-against "
+                       "setups win only 40-50%")
+            else:
+                why = "mid/deep pullback zone · wins only ~42% at 1:2"
             a = dict(id=_next_id(), time=int(time.time()), tf="15m",
                      type="WATCH",
                      price=ent["entry"], score=round(ent["passed"] / 8.0, 2),
                      confidence=round(ent["passed"] / 8.0, 2),
                      msg=(f"⏸ {grade} {ent['direction']} retest @ "
-                          f"{ent['entry']:,.2f} · {zt} zone · mid/deep zones "
-                          f"win only ~42% at 1:2 — below card quality bar, "
-                          f"watch only"))
+                          f"{ent['entry']:,.2f} · {why} — below card quality "
+                          f"bar, watch only"))
             STATE["alerts"].insert(0, a)
             del STATE["alerts"][100:]
             _save_state()
@@ -708,13 +713,14 @@ def maybe_setup_alert(ent, elite_stats=None):
                  if ent.get("contZone") else
                  "retracement zone · deeper pullback")
     elite_tag = " · 🔥 ELITE" if elite else ""
+    who = "buyers" if ent["direction"] == "LONG" else "sellers"
     hist = ""
-    if elite:
-        st = elite_stats or {}
-        if st.get("setups"):
-            hist = (f"\n📈 Elite cohort: {round((st.get('winRate') or 0) * 100):.0f}%"
-                    f" win · {st.get('avgR', 0):+.2f}R avg · n={st['setups']}"
-                    f" (A+/B+ continuation, 60d)")
+    st = elite_stats or {}
+    if st.get("setups"):
+        hist = (f"\n📈 Delta-confirmed cohort: "
+                f"{round((st.get('winRate') or 0) * 100):.0f}%"
+                f" win · {st.get('avgR', 0):+.2f}R avg · n={st['setups']}"
+                f" (60d)")
     _notify(
         f"{icon} {grade} {ent['direction']} SIGNAL{elite_tag}\n\n"
         f"📊 Timeframe: 15M\n"
@@ -724,6 +730,7 @@ def maybe_setup_alert(ent, elite_stats=None):
         f"✅ ZONE — fresh {setup_lbl.lower()} {lo_z:,.1f}–{hi_z:,.1f}\n"
         f"✅ REJECTION — {rej_lbl}\n"
         f"✅ CONFIRMATION — {conf_lbl}\n"
+        f"✅ DELTA — {who} in control (order flow confirmed)\n"
         f"📐 Zone type: {zone_type}{hist}\n\n"
         f"🎯 Entry: {ent['entry']:,.2f} (at confirmation close)\n"
         f"🛑 SL: {ent['sl']:,.2f} (beyond zone)\n"
@@ -745,71 +752,6 @@ def _close_trade(tr, result, r, price):
 # ------------------------------------------------- every-signal tracker
 # EVERY entry card (A+/B+/C+ retest + MOMENTUM) opens its own tracked
 # position and is followed to TP or SL — one result card per event.
-
-
-def _market_delta(candles, window=140, series_len=60):
-    """🌊 Market delta — volume-weighted order-flow pressure, smoothed.
-
-    Per bar, volume is split by where the close lands in the bar's range:
-    buy fraction = (close − low) / (high − low), delta = vol × (2×frac − 1).
-    The raw series is noisy, so the fast EMA(9) is what's shown (smooth
-    line) with a slow EMA(21) for the pressure trend. Falls back to a
-    range-only proxy when a source has no volume."""
-    if not candles or len(candles) < 30:
-        return None
-    bars = candles[-window:]
-    raw = []
-    for k in bars:
-        rng = float(k["h"]) - float(k["l"])
-        v = float(k.get("v") or 0.0)
-        if v <= 0:
-            v = 1.0                       # no volume → range proxy
-        frac = ((float(k["c"]) - float(k["l"])) / rng) if rng > 0 else 0.5
-        raw.append(v * (2.0 * frac - 1.0))
-
-    def _ema(xs, span):
-        out = []
-        e = xs[0]
-        a = 2.0 / (span + 1.0)
-        for x in xs:
-            e = a * x + (1 - a) * e
-            out.append(e)
-        return out
-
-    d9 = _ema(raw, 9)
-    d21 = _ema(raw, 21)
-    e9, e21 = d9[-1], d21[-1]
-    vol_all = sum(abs(x) for x in raw[-series_len:])
-    if e9 > 0 and e9 >= e21:
-        state = "BUYERS IN CONTROL"
-    elif e9 < 0 and e9 <= e21:
-        state = "SELLERS IN CONTROL"
-    elif e9 > 0:
-        state = "BUYERS FADING"
-    else:
-        state = "SELLERS FADING"
-    # divergence: last 30 bars, price higher highs but delta lower highs?
-    p_win = bars[-30:]
-    d_win = d9[-30:]
-    ph = max(float(k["h"]) for k in p_win[:15])
-    ph2 = max(float(k["h"]) for k in p_win[15:])
-    dh = max(d_win[:15]); dh2 = max(d_win[15:])
-    pl = min(float(k["l"]) for k in p_win[:15])
-    pl2 = min(float(k["l"]) for k in p_win[15:])
-    dl = min(d_win[:15]); dl2 = min(d_win[15:])
-    div = None
-    if ph2 > ph and dh2 < dh and d9[-1] < d9[-16]:
-        div = "bearish — price up, delta down"
-    elif pl2 < pl and dl2 > dl and d9[-1] > d9[-16]:
-        div = "bullish — price down, delta up"
-    mx = max(abs(x) for x in d9[-series_len:]) or 1.0
-    return dict(
-        series=[round(x / mx, 4) for x in d9[-series_len:]],
-        ema9=round(e9, 2), ema21=round(e21, 2),
-        cum=round(sum(raw[-series_len:]), 1),
-        buyPct=round((vol_all + sum(raw[-series_len:])) / (2 * vol_all), 3)
-        if vol_all > 0 else 0.5,
-        state=state, divergence=div, tf=candles and bars[-1].get("t"))
 
 
 def track_signal(src, key, direction, entry, sl, tp1, tp2):
@@ -1449,7 +1391,7 @@ def build_payload(tf, d, symbol="XAUUSD"):
     try:
         payload["fundamentals"] = fundamentals.snapshot()
         try:
-            payload["delta"] = _market_delta(candles)
+            payload["delta"] = entries.delta_view(candles)
         except Exception:  # noqa: BLE001
             payload["delta"] = None
     except Exception:  # noqa: BLE001
@@ -1464,6 +1406,16 @@ def build_payload(tf, d, symbol="XAUUSD"):
                 payload["eliteStats"] = entries.cohort_stats(candles)
             except Exception:  # noqa: BLE001
                 payload["eliteStats"] = None
+            try:
+                if ent:
+                    _d9, _d21 = entries.delta_series(candles)
+                    ent["deltaOK"] = entries.delta_align(
+                        _d9, len(candles) - 1,
+                        ent.get("direction") or "LONG")
+                    ent["deltaState"] = (payload.get("delta") or {}) \
+                        .get("state")
+            except Exception:  # noqa: BLE001
+                pass
             setups = entries.recent_setups(candles)
             W = WINDOW.get(tf, 180)
             s0 = max(0, len(candles) - W)

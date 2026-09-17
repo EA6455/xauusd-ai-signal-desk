@@ -906,16 +906,24 @@ const INITIAL = {{ payload|tojson }};
     const w = cv.width = cv.clientWidth || 300, h = cv.height = 72;
     const g = cv.getContext('2d');
     g.clearRect(0, 0, w, h);
-    const s = d.series, n = s.length, mid = h / 2;
+    const s = d.series, hs = d.hist || [], n = s.length, mid = h / 2;
+    const x = i => 2 + i * (w - 4) / (n - 1);
+    const y = v => mid - v * (mid - 5);
     // zero line
     g.strokeStyle = 'rgba(148,163,184,.25)'; g.beginPath();
     g.moveTo(0, mid); g.lineTo(w, mid); g.stroke();
-    // smoothed delta area (green above zero, red below)
-    const x = i => 2 + i * (w - 4) / (n - 1);
-    const y = v => mid - v * (mid - 4);
+    // faint per-bar histogram (raw normalized delta) — like pro panels
+    const bw = Math.max(1.5, (w - 4) / n - 1);
+    for(let i = 0; i < n; i++){
+      const v = hs[i] || 0;
+      if(!v) continue;
+      g.fillStyle = v > 0 ? 'rgba(38,211,111,.22)' : 'rgba(245,73,61,.22)';
+      const yv = y(Math.abs(v) * 0.55);        // dampened so bars stay behind the line
+      g.fillRect(x(i) - bw / 2, v > 0 ? yv : mid, bw, Math.abs(mid - yv));
+    }
+    // smooth EMA9 pressure line (green above zero, red below)
     for(const [sign, col] of [[1, '38,211,111'], [-1, '245,73,61']]){
       g.beginPath();
-      g.moveTo(x(0), mid);
       let started = false;
       for(let i = 0; i < n; i++){
         const v = s[i];
@@ -928,24 +936,23 @@ const INITIAL = {{ payload|tojson }};
       }
       if(started) g.lineTo(x(n - 1), mid);
       g.closePath();
-      g.fillStyle = 'rgba(' + col + ',.28)'; g.fill();
-      g.strokeStyle = 'rgba(' + col + ',.9)'; g.lineWidth = 1.4; g.stroke();
+      g.fillStyle = 'rgba(' + col + ',.30)'; g.fill();
+      g.strokeStyle = 'rgba(' + col + ',.95)'; g.lineWidth = 1.6; g.stroke();
     }
     // current dot
     const last = s[n - 1];
     g.beginPath();
     g.arc(x(n - 1), y(last), 2.6, 0, 7);
     g.fillStyle = last >= 0 ? 'var(--green)' : 'var(--red)'; g.fill();
-    const bull = d.ema9 >= 0;
-    st.textContent = d.state;
+    st.textContent = d.state + (d.strong ? ' · STRONG' : '');
     st.style.color = d.state.indexOf('BUYERS') === 0 ? 'var(--green)'
       : d.state.indexOf('SELLERS') === 0 ? 'var(--red)' : 'var(--amber)';
-    meta.innerHTML = 'smooth pressure EMA9 ' + (d.ema9 >= 0 ? '+' : '') + d.ema9 +
+    meta.innerHTML = 'pressure EMA9 ' + (d.ema9 >= 0 ? '+' : '') + d.ema9 +
       ' · trend EMA21 ' + (d.ema21 >= 0 ? '+' : '') + d.ema21 +
       ' · buy share ' + Math.round((d.buyPct || 0.5) * 100) + '%' +
       ' · cum Δ ' + (d.cum >= 0 ? '+' : '') + Math.round(d.cum) +
       (d.divergence ? ' · <b style="color:var(--amber)">⚠ ' + d.divergence + '</b>' : '') +
-      ' · <span style="opacity:.7">vol-weighted · close-position-in-range</span>';
+      ' · <span style="opacity:.7">vol-normalized order flow</span>';
   }
 
   // ---------- zone radar ----------
@@ -1011,6 +1018,13 @@ const INITIAL = {{ payload|tojson }};
         + lvl('Risk (ATR)', e.atr.toFixed(2))
         + lvl('Structure', e.trend1h)
         + (e.contZone ? lvl('Zone type', 'CONTINUATION · shallow pullback', 'var(--gold)') : '')
+        + (e.deltaOK !== undefined && e.grade !== '—' && e.grade
+            ? lvl('Order flow Δ',
+                  e.deltaOK ? (e.direction === 'LONG' ? 'BUYERS ✓' : 'SELLERS ✓')
+                            : 'AGAINST · watch only',
+                  e.deltaOK ? (e.direction === 'LONG' ? 'var(--green)' : 'var(--red)')
+                            : 'var(--amber)')
+            : '')
         + (e.htf ? lvl('HTF confluence', e.htf.tf + ' ' +
             (e.zoneSide === 'demand' ? 'demand' : 'supply') + ' ' +
             e.htf.bottom.toFixed(0) + '–' + e.htf.top.toFixed(0), 'var(--purple)') : '')

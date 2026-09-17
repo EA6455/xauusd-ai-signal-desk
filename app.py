@@ -1985,7 +1985,8 @@ def _llm_researcher():
     the research table + outside intel and posts its own analysis to the
     DEVELOP topic. Auto-activates the moment a provider key exists in the
     environment (set OPENAI_API_KEY etc.); without a key it reports that
-    in the live status message. Runs every 2 hours, 24/7."""
+    in the live status message. Runs hourly, 24/7, and remembers its own
+    previous IDEA lines so each brief builds on the last (self-buffing)."""
     import llm_desk
     conf = llm_desk.configured()
     now = int(time.time())
@@ -2025,6 +2026,11 @@ def _llm_researcher():
             f"{e['title']} in {e['minutesTo']}m" for e in intel["events"]))
     if intel.get("dxy") or intel.get("us10y"):
         brief.append(f"Macro: DXY {intel.get('dxy')}, US10Y {intel.get('us10y')}")
+    ideas = (r.get("llm") or {}).get("ideas") or []
+    if ideas:
+        brief.append("Your earlier research ideas (follow up — keep the "
+                     "ones holding up, refine or replace the rest): "
+                     + " | ".join(ideas[-3:]))
     sys_txt = ("You are the always-on research desk of a quantitative gold "
                "(XAUUSD) SNR trading system. Analyze the brief and reply "
                "with compact plain text, max 120 words, three short labeled "
@@ -2049,7 +2055,19 @@ def _llm_researcher():
         return False
     _notify(f"\U0001F9E0 LLM RESEARCHER \u00b7 {p['name']}\n\n{txt}",
             cat="develop")
-    r["llm"] = dict(state="active", provider=k, model=model, lastT=now)
+    # self-buffing: remember its own IDEA lines so every hourly brief makes
+    # the AI follow up on its previous research — knowledge compounds 24/7
+    idea = None
+    for ln in txt.splitlines():
+        s = ln.strip()
+        if s.upper().startswith("IDEA") and ":" in s:
+            idea = s.split(":", 1)[1].strip()[:140]
+            break
+    llm_st = dict(state="active", provider=k, model=model, lastT=now)
+    if idea:
+        llm_st["ideas"] = (((r.get("llm") or {}).get("ideas") or [])
+                           + [idea])[-5:]
+    r["llm"] = llm_st
     with STATE_LOCK:
         STATE["research"] = r
         _save_state()

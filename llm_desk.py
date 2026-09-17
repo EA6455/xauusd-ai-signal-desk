@@ -32,8 +32,8 @@ PROVIDERS = {
                       model_env="LLM_MODEL_ANTHROPIC", model="claude-3-5-haiku-latest"),
     "gemini": dict(name="Gemini Flash", icon="✨", key_env="GEMINI_API_KEY",
                    model_env="LLM_MODEL_GEMINI", model="gemini-2.5-flash"),
-    "groq": dict(name="Llama 70B", icon="🦙", key_env="GROQ_API_KEY",
-                 model_env="LLM_MODEL_GROQ", model="llama-3.3-70b-versatile"),
+    "groq": dict(name="GPT-oss 120B", icon="🦙", key_env="GROQ_API_KEY",
+                 model_env="LLM_MODEL_GROQ", model="openai/gpt-oss-120b"),
 }
 
 REFRESH_S = 900.0      # each seat re-analyzes every 15 minutes (24/7)
@@ -44,8 +44,12 @@ _lock = threading.Lock()
 
 
 def _post(url, headers, body, timeout=25):
+    # custom User-Agent: some providers (Groq/Cloudflare) 403 the default
+    # "Python-urllib" agent
+    hdrs = dict(headers)
+    hdrs.setdefault("User-Agent", "xauusd-ai-desk/1.0")
     req = urllib.request.Request(url, data=json.dumps(body).encode(),
-                                 headers=headers, method="POST")
+                                 headers=hdrs, method="POST")
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode())
 
@@ -61,10 +65,12 @@ def _call_openai(key, model, user_txt, sys_txt=None):
 
 
 def _call_groq(key, model, user_txt, sys_txt=None):
-    # Groq speaks the OpenAI schema
+    # Groq speaks the OpenAI schema. gpt-oss is a reasoning model: it can
+    # burn several hundred tokens thinking before the visible answer, so
+    # the budget must cover reasoning + content.
     j = _post("https://api.groq.com/openai/v1/chat/completions",
               {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-              dict(model=model, max_tokens=220, temperature=0.3,
+              dict(model=model, max_tokens=1200, temperature=0.3,
                    messages=[dict(role="system",
                                content=sys_txt or PROMPT_SYS),
                              dict(role="user", content=user_txt)]))

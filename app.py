@@ -106,19 +106,28 @@ TG_CHATS = [c.strip() for c in TG_CHAT.split(",") if c.strip()]
 
 
 TG_TOPIC_FILE = os.path.join(BASE, "telegram_topics.json")
+# Baked-in topic map for the forum group (SIGNAL 59 / NEWS 60, verified
+# open on 2026-09-17). Render's free tier wipes the learned topic file on
+# every redeploy — without this default the map is lost and signal cards
+# silently fall back to the General topic. The on-disk file (learned or
+# shipped) still overrides, and tg_topic_detect() still re-learns if a
+# topic ever goes away.
+DEFAULT_TG_TOPICS = {"signal": 59, "news": 60, "complete": True}
 _TG_TOPICS = None
 
 
 def _tg_topics():
     """{'signal': thread_id, 'news': thread_id} for the forum group, learned
-    automatically by tg_topic_detect(). Empty while the group has no topics."""
+    automatically by tg_topic_detect(). Falls back to DEFAULT_TG_TOPICS when
+    nothing has been learned yet (fresh deploy), so signal cards always land
+    in the SIGNAL topic."""
     global _TG_TOPICS
     if _TG_TOPICS is None:
         try:
             with open(TG_TOPIC_FILE) as f:
                 _TG_TOPICS = json.load(f)
         except Exception:  # noqa: BLE001
-            _TG_TOPICS = {}
+            _TG_TOPICS = dict(DEFAULT_TG_TOPICS)
     return _TG_TOPICS
 
 
@@ -156,9 +165,12 @@ def _notify(text, cat="signal"):
                     print(f"[tg] topic unavailable in {chat} — "
                           f"sent to General; re-learning topics", flush=True)
                     global _TG_TOPICS
-                    _TG_TOPICS = None
+                    # park on General (topic 1) and mark incomplete so
+                    # tg_topic_detect() resumes re-learning new topic IDs
+                    _TG_TOPICS = {"signal": 1, "news": 1, "complete": False}
                     try:
-                        os.remove(TG_TOPIC_FILE)
+                        with open(TG_TOPIC_FILE, "w") as f:
+                            json.dump(_TG_TOPICS, f)
                     except OSError:
                         pass
                 else:
@@ -2144,7 +2156,8 @@ def pwa_icon(name):
 @app.route("/api/health")
 def health():
     return jsonify(ok=True, tfs=list(data.TFS),
-                   telegram=bool(TG_TOKEN and TG_CHAT))
+                   telegram=bool(TG_TOKEN and TG_CHAT),
+                   topics=_tg_topics())
 
 
 # Start the realtime feed + background loop at import time so WSGI servers

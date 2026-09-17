@@ -74,10 +74,29 @@ def app_version():
 
 # ------------------------------------------------------------------ state
 STATE_LOCK = threading.Lock()
+_BOOT_T = time.time()             # uptime for the member digest
+
+# The desk announces its own updates to the group (DEVELOP topic): every
+# deployed version posts its changelog there automatically on boot.
+SYSTEM_VERSION = "2.8.0"
+SYSTEM_CHANGELOG = {
+    "2.8.0": [
+        "The AI desk now informs members itself: every deploy posts its "
+        "changelog here automatically",
+        "DESK UPDATE digest every 6h: engine record, AI trader scorecard, "
+        "research, calendar, system health",
+        "One voice: only the production desk posts to the group — no more "
+        "duplicate digests or test noise from research machines",
+        "AI trader accountability: every call tracked & scored against real "
+        "price action, honest win% / avgR on the panel",
+        "AI trader best-signal card + hourly auto-refresh (2.7.x)",
+    ],
+}
+
 STATE = dict(alerts=[], priceAlerts=[], lastSig={}, lastPrice=None,
              liveTrade=None, tradeHistory=[], signalTrades=[], lastSigT={},
              lastSetup=None, lastSetupT=0.0, eventAlerted=[], newsSeen=None,
-             brokerOffset=0.0, aiTrades=[])
+             brokerOffset=0.0, aiTrades=[], sysVer=None)
 try:
     with open(STATE_PATH) as f:
         _loaded = json.load(f)
@@ -132,6 +151,13 @@ def _tg_topics():
     return _TG_TOPICS
 
 
+def _desk_speaker():
+    """Only the production desk (DESK_SPEAKER=1, set on Render) sends
+    automatic Telegram updates. Research/sandbox machines run the same
+    loops but stay silent — members hear ONE desk, not echoes."""
+    return os.environ.get("DESK_SPEAKER") == "1"
+
+
 def _notify(text, cat="signal"):
     """Send a Telegram message to every configured chat (private and/or
     group). In a forum group each message lands in its own topic:
@@ -139,6 +165,8 @@ def _notify(text, cat="signal"):
     Private chats are unaffected."""
     if not (TG_TOKEN and TG_CHATS):
         return
+    if not _desk_speaker():
+        return          # one voice: only the production desk posts
     import urllib.request
     tops = _tg_topics()
     for chat in TG_CHATS:
@@ -3384,6 +3412,112 @@ def _background_loop():
         time.sleep(6)
 
 
+_desk_mem = dict(lastVersionPost=None, lastDigestPost=None)
+DESK_UPDATE_S = 6 * 3600      # member digest cadence
+
+
+def _announce_version():
+    """On boot: if this software version was never announced, tell the
+    members in DEVELOP what changed — the system informs the group by
+    itself on every deploy."""
+    time.sleep(120)                       # let the feeds warm up first
+    try:
+        if not _desk_speaker():
+            return
+        if STATE.get("sysVer") == SYSTEM_VERSION:
+            return
+        lines = [f"\U0001F4E1 SYSTEM UPDATE \u00b7 v{SYSTEM_VERSION}", ""]
+        for i, ch in enumerate(
+                SYSTEM_CHANGELOG.get(SYSTEM_VERSION) or [], 1):
+            lines.append(f"{i}. {ch}")
+        lines += ["", "The desk hosts and updates itself \u2014 members "
+                  "are informed here automatically on every deploy."]
+        _notify("\n".join(lines), cat="develop")
+        with STATE_LOCK:
+            STATE["sysVer"] = SYSTEM_VERSION
+            STATE["sysVerT"] = int(time.time())
+            _save_state()
+        cloud_save(force=True)
+        _desk_mem["lastVersionPost"] = int(time.time())
+        print(f"[desk] announced v{SYSTEM_VERSION} to DEVELOP",
+              flush=True)
+    except Exception as e:  # noqa: BLE001
+        print(f"[desk] version announce failed: {e}", flush=True)
+
+
+def _desk_update_digest():
+    """One compact card for the members: what the desk is doing."""
+    lines = ["\U0001F4E1 DESK UPDATE \u00b7 "
+             + time.strftime("%a %H:%M UTC", time.gmtime()), ""]
+    res = ((STATE.get("research") or {}).get("last") or {})
+    prod = (res.get("production") or {}).get("full") or {}
+    if prod.get("n"):
+        lines.append(
+            f"\U0001F916 Engine record: {prod['n']} trades \u00b7 "
+            f"{round((prod.get('win') or 0) * 100)}% win \u00b7 "
+            f"{prod.get('avgR', 0):+.2f}R avg")
+    ae = STATE.get("autoexec") or {}
+    if ae:
+        lines.append(
+            f"\U0001F9EA Paper engine: {ae.get('totalTrades', 0)} trades "
+            f"\u00b7 {(ae.get('totalPnl') or 0):+.2f}$ \u00b7 equity "
+            f"{_ae_equity(ae):.2f}$")
+    try:
+        st = _ai_trader_stats()
+        sig = _ai_trader_mem.get("sig") or {}
+        if st["n"]:
+            lines.append(f"\U0001F9E0 AI trader: {st['n']} calls \u00b7 "
+                         f"{st['winPct']}% win \u00b7 {st['avgR']:+.2f}R avg")
+        elif sig:
+            age = max(1, int((time.time() - sig.get("t", 0)) / 60))
+            last = (f"{sig['direction'].upper()} "
+                    f"{sig.get('entry', '\u2014')}"
+                    if sig.get("direction") != "none" else "stand aside")
+            lines.append(f"\U0001F9E0 AI trader: record building \u00b7 "
+                         f"latest call {age}m ago: {last}")
+    except Exception:  # noqa: BLE001
+        pass
+    up = (STATE.get("research") or {}).get("upgrade") or {}
+    if up.get("pending"):
+        p = up["pending"]
+        lines.append(f"\U0001F52C Research: challenger {p.get('name')} "
+                     f"pending ({p.get('streak', 1)}/3 checks)")
+    else:
+        ex = up.get("exit") or [1, 2]
+        lines.append(f"\U0001F52C Research: {len(res.get('variants') or [])} "
+                     f"challengers in test \u00b7 production stable "
+                     f"({up.get('gate', 'delta')}-gate, exit "
+                     f"{ex[0]:g}:{ex[1]:g})")
+    try:
+        nx = (fundamentals.snapshot() or {}).get("nextHigh") or {}
+        if nx.get("title"):
+            lines.append(f"\U0001F4C5 Next high-impact: {nx['title']} "
+                         f"in {nx.get('minutesTo', '?')}m")
+    except Exception:  # noqa: BLE001
+        pass
+    live = [a for a in (STATE.get("mt5") or [])
+            if a.get("state") == "connected"]
+    mode = (f"{len(live)} live MT5 account(s)"
+            if live else "paper engine only")
+    up_h = int((time.time() - _BOOT_T) / 3600)
+    lines.append(f"\u2699\ufe0f System v{SYSTEM_VERSION} \u00b7 uptime "
+                 f"{up_h}h \u00b7 loops healthy \u00b7 {mode}")
+    return "\n".join(lines)
+
+
+def _desk_update_loop():
+    time.sleep(900)                       # first digest 15 min after boot
+    while True:
+        try:
+            if _desk_speaker():
+                _notify(_desk_update_digest(), cat="develop")
+                _desk_mem["lastDigestPost"] = int(time.time())
+                print("[desk] member digest sent to DEVELOP", flush=True)
+        except Exception as e:  # noqa: BLE001
+            print(f"[desk] digest failed: {e}", flush=True)
+        time.sleep(DESK_UPDATE_S)
+
+
 def start_background():
     global _bg_started
     wsfeed.start()                      # real-time websocket gold feed
@@ -3401,6 +3535,8 @@ def start_background():
     _ae()                               # ensure the auto-trade engine exists
     threading.Thread(target=_background_loop, daemon=True).start()
     threading.Thread(target=_research_loop, daemon=True).start()
+    threading.Thread(target=_announce_version, daemon=True).start()
+    threading.Thread(target=_desk_update_loop, daemon=True).start()
 
 
 # ------------------------------------------------- cross-deploy persistence
@@ -3457,6 +3593,8 @@ def cloud_load():
                 STATE["autoexec"] = blob["autoexec"]
             STATE["aiTrades"] = _ai_trades_merge(
                 blob.get("aiTrades"), STATE.get("aiTrades"))
+            if blob.get("sysVer") and not STATE.get("sysVer"):
+                STATE["sysVer"] = blob["sysVer"]
             _save_state()
         return True
     except Exception:  # noqa: BLE001  — 404 (nothing saved yet) or offline
@@ -3527,7 +3665,8 @@ def cloud_save(force=False):
         lae = STATE.get("autoexec") or {}
         ae = lae if (lae.get("totalTrades", 0) >=
                      rae.get("totalTrades", 0)) else rae
-        blob = dict(mt5=list(merged.values())[:20],
+        blob = dict(sysVer=SYSTEM_VERSION,
+                    mt5=list(merged.values())[:20],
                     autoexec=ae,
                     mt5_deleted=sorted(dead)[-50:],
                     aiTrades=_ai_trades_merge(remote.get("aiTrades"),
@@ -4171,6 +4310,15 @@ def api_ai_trader_run():
         return jsonify(error=_ai_trader_mem.get("lastErr")
                        or "AI trader unavailable"), 503
     return _ai_trader_payload(sig=sig)
+
+
+@app.route("/api/desk/updates")
+def api_desk_updates():
+    return jsonify(version=SYSTEM_VERSION, speaker=_desk_speaker(),
+                   announced=STATE.get("sysVer") == SYSTEM_VERSION,
+                   lastVersionPost=_desk_mem["lastVersionPost"],
+                   lastDigestPost=_desk_mem["lastDigestPost"],
+                   changelog=SYSTEM_CHANGELOG.get(SYSTEM_VERSION) or [])
 
 
 @app.route("/api/trades")

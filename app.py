@@ -1906,7 +1906,7 @@ def _research_status():
 
 
 INTEL_SCAN_S = 900          # outside-intel self-research every 15 min
-LLM_RESEARCH_S = 7200       # external-AI research analysis every 2 h
+LLM_RESEARCH_S = 3600       # external-AI research analysis every hour
 
 
 def _research_intel():

@@ -973,8 +973,14 @@ def _mt5_prov_url():
     return MTA_PROV + MTA_DOMAINS[0]
 
 
-EXNESS_SERVERS = ("Exness-Real", "Exness-Cent", "Exness-Trial",
-                  "Exness-MT5Trial17")
+EXNESS_SERVERS = ("Exness-Real", "Exness-Cent", "Exness-MT5Trial",
+                  "Exness-Real14", "Exness-Cent8")
+
+
+def _mt5_sys_token():
+    """The system-hosted MetaApi bridge token (env METAAPI_TOKEN). People
+    never need their own token — they paste MT5 login/password/server."""
+    return os.environ.get("METAAPI_TOKEN") or ""
 
 
 def _enc(s):
@@ -1081,7 +1087,11 @@ def _mt5_provision_thread(acc, tries=None):
                         "broker rejected the connection — check the MT5 "
                         "login, password and server name, then press "
                         "Connect again")
-            except Exception:  # noqa: BLE001  timeout / transient — keep polling
+            except Exception as e:  # noqa: BLE001  timeout / transient
+                if isinstance(e, _Mt5Error) and "404" in str(e):
+                    acc.pop("accountId", None)   # stale upstream — re-create
+                    raise RuntimeError("stale bridge account — will "
+                                       "re-create")
                 continue
         if last != "CONNECTED":
             raise RuntimeError(f"terminal state: {last or 'unreachable'} "
@@ -1136,14 +1146,53 @@ def _mt5_sync_acc(acc):
     return info
 
 
+_mt5_spec_mem = {}          # accountId -> (t, spec)
+
+
+def _mt5_get_spec(acc):
+    """The broker's own XAUUSD contract spec: exact contract size, min
+    volume, volume step — so sizing fits the person's real account."""
+    key = acc.get("accountId")
+    if not key:
+        return None
+    now = time.time()
+    hit = _mt5_spec_mem.get(key)
+    if hit and now - hit[0] < 600:
+        return hit[1]
+    try:
+        host = _mt5_client_host(_dec(acc["tokenEnc"]))
+        spec = _mt5_req("GET", f"{MTA_CLIENT}{host}/users/current/accounts/"
+                               f"{key}/symbols/XAUUSD/specification",
+                        _dec(acc["tokenEnc"]))
+        _mt5_spec_mem[key] = (now, spec)
+        return spec
+    except Exception:  # noqa: BLE001  — fall back to standard gold spec
+        return None
+
+
 def _mt5_lots(acc, stop_dist):
-    """Risk-sized lots. Works in the account's own currency (dollar or
-    cent — the XAUUSD contract is 100 oz in both)."""
+    """Risk-sized lots using the account's EXACT balance and the broker's
+    own contract spec. Works for real, demo, trial, standard and cent
+    accounts (cent currencies like USc scale x100 automatically)."""
     bal = float(acc.get("equity") or acc.get("balance") or 0)
     if bal <= 0 or stop_dist <= 0:
         return None
-    lots = bal * (acc.get("riskPct", 1.0) / 100.0) / (stop_dist * 100.0)
-    return min(max(0.01, round(lots, 2)), 5.0)
+    spec = _mt5_get_spec(acc) or {}
+    contract = float(spec.get("contractSize") or 100)
+    min_lot = float(spec.get("minVolume") or 0.01)
+    step = float(spec.get("volumeStep") or 0.01)
+    max_lot = float(spec.get("maxVolume") or 100)
+    cur = (acc.get("currency") or "USD").upper()
+    scale = 100.0 if cur.endswith("C") and cur != "USDC" else 1.0
+    loss_per_lot = stop_dist * contract * scale     # account currency
+    risk_amt = bal * (acc.get("riskPct", 1.0) / 100.0)
+    lots = risk_amt / loss_per_lot
+    lots = int(lots / step) * step                  # round DOWN to step
+    if lots < min_lot:
+        if min_lot * loss_per_lot > risk_amt * 1.5:
+            return None        # even the minimum lot risks too much — skip
+        lots = min_lot
+    return round(min(lots, max_lot), 2)
 
 
 def _mt5_exec_live(pos, stop_dist):
@@ -3418,16 +3467,20 @@ def api_mt5_connect():
     login = str(j.get("login") or "").strip()
     pw = str(j.get("password") or "")
     server = str(j.get("server") or "").strip()
-    token = str(j.get("token") or "").strip()
+    token = str(j.get("token") or "").strip() or _mt5_sys_token()
     try:
         risk = float(j.get("riskPct") or 1.0)
     except (TypeError, ValueError):
         risk = 1.0
-    cent = bool(j.get("cent"))
+    acc_type = str(j.get("accType") or "real").lower()   # real|demo|cent
+    cent = acc_type == "cent"
     label = str(j.get("label") or "").strip()[:30]
-    if not (login.isdigit() and pw and server and token):
-        return jsonify(error="login (number), password, server and "
-                             "MetaApi token are all required"), 400
+    if not (login.isdigit() and pw and server):
+        return jsonify(error="MT5 login (number), password and server "
+                             "are required"), 400
+    if not token:
+        return jsonify(error="trading bridge not configured yet — the "
+                             "owner must set METAAPI_TOKEN once"), 503
     if any(str(a.get("login")) == login and a.get("server") == server
            for a in _mt5_accounts()):
         return jsonify(error="this account is already connected"), 409

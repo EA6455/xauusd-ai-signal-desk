@@ -510,17 +510,21 @@
             <input id="mt5Pw" type="password" placeholder="MT5 password" autocomplete="new-password">
           </div>
           <div class="mt5-row">
-            <input id="mt5Server" list="mt5Servers" placeholder="Server (e.g. Exness-Cent)" autocomplete="off">
+            <input id="mt5Server" list="mt5Servers" placeholder="Server — exact name from your MT5 app (e.g. Exness-MT5Trial17)" autocomplete="off">
             <datalist id="mt5Servers">
               <option value="Exness-Real"></option>
               <option value="Exness-Cent"></option>
-              <option value="Exness-Trial"></option>
+              <option value="Exness-MT5Trial"></option>
+              <option value="Exness-Real14"></option>
+              <option value="Exness-Cent8"></option>
             </datalist>
-            <input id="mt5Token" type="password" placeholder="MetaApi API token" autocomplete="new-password">
           </div>
           <div class="mt5-row" style="align-items:center">
-            <label class="small" style="display:flex; align-items:center; gap:6px; flex:none">
-              <input type="checkbox" id="mt5Cent" checked> cent account</label>
+            <select id="mt5Type" style="flex:1 1 130px" title="account type">
+              <option value="real">Real / Standard</option>
+              <option value="demo">Demo / Trial</option>
+              <option value="cent">Cent</option>
+            </select>
             <input id="mt5Risk" type="number" min="0.1" max="5" step="0.1" value="1" style="width:74px" title="risk % per trade">
             <span class="small muted" style="flex:none">% risk</span>
             <button id="mt5Connect" class="mt5-btn">Connect &amp; let it trade</button>
@@ -528,13 +532,13 @@
         </div>
         <div id="mt5List" style="margin-top:12px"></div>
         <div class="small muted" style="margin-top:10px; line-height:1.5">
-          Paste your Exness MT5 login, server and password — the bot trades this
-          account by itself with the signals you see on this page.
-          Get a free API token at
-          <a href="https://metaapi.cloud" target="_blank" rel="noopener">metaapi.cloud</a>
-          (sign up → API tokens → create). Your password is stored encrypted and
-          used only to connect <b>your own</b> account. Standard MT5 brokers work
-          too — just type the exact server name from your MT5 app.
+          Paste your Exness MT5 <b>login, password and server — that's all</b>.
+          Real, demo, trial, standard and cent accounts are all supported.
+          Lot size is computed from <b>your account's exact balance</b> at your
+          chosen risk %. The trading bridge is hosted by the system — no API
+          keys or tokens needed. Any MT5 broker works too; just type the exact
+          server name from your MT5 app. Your password is stored encrypted and
+          used only to connect <b>your own</b> account.
         </div>
       </div>
 
@@ -2355,7 +2359,7 @@ const INITIAL = {{ payload|tojson }};
           + '<span class="muted">' + a.login + ' @ ' + a.server + '</span>'
           + (bal ? '<span class="mono">' + bal + '</span>' : '')
           + '<span class="muted">' + (a.riskPct || 1) + '% risk'
-          + (a.cent ? ' · cent' : '') + '</span>'
+          + ((a.currency || '').endsWith('c') ? ' · cent auto-detected' : '') + '</span>'
           + (a.state === 'connecting' ? '<span class="muted">connecting…</span>' : '')
           + (a.err ? '<span style="color:var(--red)">⚠ ' + a.err.slice(0, 60) + '</span>' : '')
           + '<button class="mt5-x" onclick="mt5Del(' + a.id + ')">disconnect</button></div>';
@@ -2375,21 +2379,20 @@ const INITIAL = {{ payload|tojson }};
     const login = $('mt5Login').value.trim();
     const pw = $('mt5Pw').value;
     const server = $('mt5Server').value.trim();
-    const token = $('mt5Token').value.trim();
-    if(!(login && pw && server && token)){
-      toast('Fill login, password, server and MetaApi token'); return;
+    if(!(login && pw && server)){
+      toast('Fill MT5 login, password and server'); return;
     }
     $('mt5Connect').textContent = 'Connecting…';
     try{
       const r = await apiFetch('/api/mt5/connect', {
         method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({login, password: pw, server, token,
-          riskPct: parseFloat($('mt5Risk').value) || 1,
-          cent: $('mt5Cent').checked})
+        body: JSON.stringify({login, password: pw, server,
+          accType: $('mt5Type').value,
+          riskPct: parseFloat($('mt5Risk').value) || 1})
       });
       const j = await r.json();
       if(j.error){ toast('⚠ ' + j.error); return; }
-      $('mt5Pw').value = ''; $('mt5Token').value = '';
+      $('mt5Pw').value = '';
       toast('🔗 Connecting your account — takes up to a minute the first time');
       mt5Load();
       setTimeout(mt5Load, 8000); setTimeout(mt5Load, 25000); setTimeout(mt5Load, 60000);

@@ -1093,7 +1093,7 @@ def _mt5_provision_thread(acc, tries=None):
         # cloud terminals do NOT auto-deploy via REST — deploy explicitly
         try:
             _mt5_req("POST", f"/users/current/accounts/{acc['accountId']}"
-                             "/deploy", tok, prov=True)
+                             "/deploy", tok, timeout=90, prov=True)
         except _Mt5Error as e:
             s = str(e)
             if "403" in s or "top up" in s:

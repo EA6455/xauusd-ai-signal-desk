@@ -1042,43 +1042,50 @@ def _mt5_provision_thread(acc, tries=None):
     tok = _dec(acc["tokenEnc"])
     acc["tries"] = (acc.get("tries") or 0) + 1 if tries is None else tries
     try:
-        import uuid
-        txn = uuid.uuid4().hex
-        created = None
-        for attempt in range(10):          # 202 -> same txn, retry
-            try:
-                created = _mt5_req(
-                    "POST", "/users/current/accounts", tok,
-                    dict(login=str(acc["login"]),
-                         password=_dec(acc["pwEnc"]),
-                         name=f"xauusd-ai {acc['login']}",
-                         server=acc["server"], platform="mt5",
-                         magic=20260918, type="cloud-g2",
-                         keywords=[acc.get("broker") or "Exness"]),
-                    prov=True, txn=txn)
-                break
-            except _Mt5Error as e:
-                if "202" in str(e) or "retry" in str(e).lower():
-                    time.sleep(min(60, 15 * (attempt + 1)))
-                    continue
-                raise
-        if not created or not created.get("id"):
-            raise RuntimeError("account creation returned no id")
-        acc["accountId"] = created["id"]
-        host = _mt5_client_host(tok)
-        ok = False
-        for _ in range(48):                # up to ~4 minutes to deploy
+        if not acc.get("accountId"):       # retries reuse the created one
+            import uuid
+            txn = uuid.uuid4().hex
+            created = None
+            for attempt in range(10):      # 202 -> same txn, retry
+                try:
+                    created = _mt5_req(
+                        "POST", "/users/current/accounts", tok,
+                        dict(login=str(acc["login"]),
+                             password=_dec(acc["pwEnc"]),
+                             name=f"xauusd-ai {acc['login']}",
+                             server=acc["server"], platform="mt5",
+                             magic=20260918, type="cloud-g2",
+                             keywords=[acc.get("broker") or "Exness"]),
+                        prov=True, txn=txn)
+                    break
+                except _Mt5Error as e:
+                    if "202" in str(e) or "retry" in str(e).lower():
+                        time.sleep(min(60, 15 * (attempt + 1)))
+                        continue
+                    raise
+            if not created or not created.get("id"):
+                raise RuntimeError("account creation returned no id")
+            acc["accountId"] = created["id"]
+        # wait for the cloud terminal to connect to the broker
+        last = None
+        for i in range(90):                # up to ~7.5 minutes
             time.sleep(5)
             try:
-                _mt5_req("GET", f"{MTA_CLIENT}{host}/users/current/"
-                                f"accounts/{acc['accountId']}/"
-                                f"account-information", tok)
-                ok = True
-                break
-            except Exception:  # noqa: BLE001  not deployed yet
+                st = _mt5_req("GET", f"/users/current/accounts/"
+                                     f"{acc['accountId']}", tok, prov=True)
+                last = st.get("connectionStatus")
+                if last == "CONNECTED":
+                    break
+                if last == "DISCONNECTED" and i > 12:
+                    raise RuntimeError(
+                        "broker rejected the connection — check the MT5 "
+                        "login, password and server name, then press "
+                        "Connect again")
+            except _Mt5Error:
                 continue
-        if not ok:
-            raise RuntimeError("terminal did not become ready in 4 min")
+        if last != "CONNECTED":
+            raise RuntimeError(f"terminal state: {last or 'unreachable'} "
+                               "after 7.5 min — will keep retrying")
         _mt5_sync_acc(acc)
         acc["state"] = "connected"
         acc["err"] = None

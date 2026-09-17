@@ -1060,7 +1060,10 @@ def _mt5_provision_thread(acc, tries=None):
                              password=_dec(acc["pwEnc"]),
                              name=f"xauusd-ai {acc['login']}",
                              server=acc["server"], platform="mt5",
-                             magic=20260918, type="cloud-g2",
+                             magic=20260918,
+                             type="cloud-g1",          # free-tier compatible
+                             reliability="regular",
+                             symbol="XAUUSD",
                              keywords=[acc.get("broker") or "Exness"]),
                         prov=True, txn=txn)
                     break

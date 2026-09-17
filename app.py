@@ -942,8 +942,39 @@ def _ae_close(tr):
 # which runs the terminal for us and exposes a REST API. Credentials are
 # encrypted at rest and only ever used to connect the owner's account.
 
-MTAAPI = "https://mt-client-api-v1.agiliumtrade.ai"
-EXNESS_SERVERS = ("Exness-Real", "Exness-Cent", "Exness-Trial")
+MTA_DOMAINS = ("agiliumtrade.agiliumtrade.ai", "metaapi.cloud")
+MTA_PROV = "https://mt-provisioning-api-v1."
+MTA_CLIENT = "https://mt-client-api-v1."
+_mt5_host_mem = {"t": 0.0, "host": None}   # dynamic client-api hostname
+
+
+def _mt5_client_host(token):
+    """MetaApi migrates API hostnames (the original agiliumtrade.ai domain
+    was retired). The official SDK resolves the current client-api host
+    from the provisioning API — we do the same, cached 24h, with static
+    fallbacks."""
+    now = time.time()
+    if _mt5_host_mem["host"] and now - _mt5_host_mem["t"] < 86400:
+        return _mt5_host_mem["host"]
+    for dom in MTA_DOMAINS:
+        try:
+            j = _mt5_req("GET", MTA_PROV + dom +
+                         "/users/current/servers/mt-client-api", token)
+            host = (j or {}).get("hostname")
+            if host:
+                _mt5_host_mem.update(t=now, host=host)
+                return host
+        except Exception:  # noqa: BLE001
+            continue
+    return "mt-client-api-v1." + MTA_DOMAINS[0]
+
+
+def _mt5_prov_url():
+    return MTA_PROV + MTA_DOMAINS[0]
+
+
+EXNESS_SERVERS = ("Exness-Real", "Exness-Cent", "Exness-Trial",
+                  "Exness-MT5Trial17")
 
 
 def _enc(s):
@@ -968,48 +999,86 @@ def _dec(s):
         return ""
 
 
-def _mt5_req(method, path, token, body=None, timeout=25):
+class _Mt5Error(Exception):
+    pass
+
+
+def _mt5_req(method, path, token, body=None, timeout=25, prov=False,
+             txn=None):
+    """One MetaApi REST call. auth-token header; JSON error bodies raise
+    with the server's own message. `path` is the path only when `prov`
+    is set (provisioning API), else a full URL."""
     import urllib.request
+    url = _mt5_prov_url() + path if prov else path
+    headers = {"auth-token": token, "Content-Type": "application/json",
+               "Accept": "application/json",
+               "User-Agent": "xauusd-ai-desk/1.0"}
+    if txn:
+        headers["transaction-id"] = txn
     req = urllib.request.Request(
-        MTAAPI + path,
-        data=json.dumps(body).encode() if body is not None else None,
-        headers={"API-Token": token, "Content-Type": "application/json",
-                 "User-Agent": "xauusd-ai-desk/1.0"}, method=method)
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        raw = r.read().decode()
-    return json.loads(raw) if raw else {}
+        url, data=json.dumps(body).encode() if body is not None else None,
+        headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            raw = r.read().decode()
+            return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as e:
+        try:
+            msg = (json.loads(e.read().decode()) or {}).get(
+                "message", str(e))
+        except Exception:  # noqa: BLE001
+            msg = str(e)
+        raise _Mt5Error(f"{e.code}: {msg}") from None
 
 
 def _mt5_accounts():
     return STATE.get("mt5") or []
 
 
-def _mt5_provision_thread(acc):
-    """Connect a newly submitted account: provision it on MetaApi, wait
-    for the cloud terminal to deploy, pull balance/equity, then mark it
-    live. Runs in the background so the web request never blocks."""
+def _mt5_provision_thread(acc, tries=None):
+    """Connect a submitted account end-to-end: create it on MetaApi
+    (retries while automatic broker detection runs — 202s), wait for the
+    cloud terminal to deploy, pull balance/equity, mark connected."""
+    tok = _dec(acc["tokenEnc"])
+    acc["tries"] = (acc.get("tries") or 0) + 1 if tries is None else tries
     try:
-        j = _mt5_req("POST", "/users/current/accounts", _dec(acc["tokenEnc"]),
-                     dict(login=str(acc["login"]),
-                          password=_dec(acc["pwEnc"]),
-                          server=acc["server"], platform="mt5",
-                          broker=acc.get("broker") or "Exness"))
-        acc["accountId"] = j.get("accountId")
-        if not acc.get("accountId"):
-            raise RuntimeError("no accountId returned")
-        for _ in range(36):                       # up to ~3 minutes
+        import uuid
+        txn = uuid.uuid4().hex
+        created = None
+        for attempt in range(10):          # 202 -> same txn, retry
+            try:
+                created = _mt5_req(
+                    "POST", "/users/current/accounts", tok,
+                    dict(login=str(acc["login"]),
+                         password=_dec(acc["pwEnc"]),
+                         name=f"xauusd-ai {acc['login']}",
+                         server=acc["server"], platform="mt5",
+                         magic=20260918, type="cloud-g2",
+                         keywords=[acc.get("broker") or "Exness"]),
+                    prov=True, txn=txn)
+                break
+            except _Mt5Error as e:
+                if "202" in str(e) or "retry" in str(e).lower():
+                    time.sleep(min(60, 15 * (attempt + 1)))
+                    continue
+                raise
+        if not created or not created.get("id"):
+            raise RuntimeError("account creation returned no id")
+        acc["accountId"] = created["id"]
+        host = _mt5_client_host(tok)
+        ok = False
+        for _ in range(48):                # up to ~4 minutes to deploy
             time.sleep(5)
             try:
-                c = _mt5_req("GET", f"/users/current/accounts/"
-                                    f"{acc['accountId']}/connection",
-                             _dec(acc["tokenEnc"]))
-            except Exception:  # noqa: BLE001
+                _mt5_req("GET", f"{MTA_CLIENT}{host}/users/current/"
+                                f"accounts/{acc['accountId']}/"
+                                f"account-information", tok)
+                ok = True
+                break
+            except Exception:  # noqa: BLE001  not deployed yet
                 continue
-            if c.get("state") in ("DEPLOYED", "DEPLOYING"):
-                if c.get("state") == "DEPLOYED":
-                    break
-        else:
-            raise RuntimeError("terminal did not deploy in 3 min")
+        if not ok:
+            raise RuntimeError("terminal did not become ready in 4 min")
         _mt5_sync_acc(acc)
         acc["state"] = "connected"
         acc["err"] = None
@@ -1028,13 +1097,30 @@ def _mt5_provision_thread(acc):
                 f"🤖 the bot now trades this account automatically at "
                 f"{acc.get('riskPct', 1):g}% risk", cat="signal")
     else:
-        _notify(f"⚠ MT5 CONNECT FAILED · {acc.get('label') or acc['login']}\n"
-                f"{acc.get('err')}", cat="signal")
+        _notify(f"⚠ MT5 CONNECT FAILED · {acc.get('label') or acc['login']}"
+                f"\n{acc.get('err')}", cat="signal")
+
+
+def _mt5_retry_stuck():
+    """Self-healing: re-attempt accounts stuck in error (e.g. after an
+    API outage) up to 5 times, ~10 minutes apart. Runs from the loop."""
+    now = time.time()
+    for acc in _mt5_accounts():
+        if acc.get("state") != "error":
+            continue
+        if (acc.get("tries") or 0) >= 5:
+            continue
+        if now - acc.get("lastTryT", 0) < 600:
+            continue
+        acc["lastTryT"] = int(now)
+        threading.Thread(target=_mt5_provision_thread, args=(acc,),
+                         daemon=True).start()
 
 
 def _mt5_sync_acc(acc):
-    info = _mt5_req("GET", f"/users/current/accounts/"
-                           f"{acc.get('accountId')}/accountInformation",
+    host = _mt5_client_host(_dec(acc["tokenEnc"]))
+    info = _mt5_req("GET", f"{MTA_CLIENT}{host}/users/current/accounts/"
+                           f"{acc.get('accountId')}/account-information",
                     _dec(acc["tokenEnc"]))
     acc["balance"] = round(float(info.get("balance") or 0), 2)
     acc["equity"] = round(float(info.get("equity") or 0), 2)
@@ -1044,18 +1130,13 @@ def _mt5_sync_acc(acc):
 
 
 def _mt5_lots(acc, stop_dist):
-    """Risk-sized lots for a live account. Cent accounts trade x100 the
-    base sizing (balance is reported in cents → /100 for true USD)."""
+    """Risk-sized lots. Works in the account's own currency (dollar or
+    cent — the XAUUSD contract is 100 oz in both)."""
     bal = float(acc.get("equity") or acc.get("balance") or 0)
-    if acc.get("cent"):
-        bal = bal / 100.0
     if bal <= 0 or stop_dist <= 0:
         return None
     lots = bal * (acc.get("riskPct", 1.0) / 100.0) / (stop_dist * 100.0)
-    if acc.get("cent"):
-        lots *= 100.0
-    lots = max(0.01, round(lots, 2))
-    return min(lots, 5.0)
+    return min(max(0.01, round(lots, 2)), 5.0)
 
 
 def _mt5_exec_live(pos, stop_dist):
@@ -1068,15 +1149,23 @@ def _mt5_exec_live(pos, stop_dist):
         if not lots:
             continue
         try:
+            host = _mt5_client_host(_dec(acc["tokenEnc"]))
             j = _mt5_req(
-                "POST", f"/users/current/accounts/{acc['accountId']}/trade",
+                "POST", f"{MTA_CLIENT}{host}/users/current/accounts/"
+                        f"{acc['accountId']}/trade",
                 _dec(acc["tokenEnc"]),
-                dict(action="ORDER_TYPE_MARKET", symbol="XAUUSD",
-                     volume=lots, stopLoss=pos["sl"], takeProfit=pos["tp2"],
+                dict(actionType="ORDER_TYPE_BUY" if pos["dir"] == "LONG"
+                     else "ORDER_TYPE_SELL",
+                     symbol="XAUUSD", volume=lots,
+                     stopLoss=pos["sl"], takeProfit=pos["tp2"],
                      comment="xauusd-ai"))
+            if j.get("numericCode") not in (10009, 10008):
+                raise RuntimeError(j.get("message") or j.get("stringCode")
+                                   or "trade rejected")
             out.append(dict(accId=acc["id"], login=acc["login"],
                             server=acc["server"], lots=lots,
-                            ticket=str(j)))
+                            ticket=str(j.get("positionId")
+                                       or j.get("orderId") or "")))
         except Exception as e:  # noqa: BLE001
             out.append(dict(accId=acc["id"], login=acc["login"],
                             server=acc["server"], lots=lots,
@@ -1094,11 +1183,12 @@ def _mt5_close_live(pos):
         if not acc or not acc.get("accountId"):
             continue
         try:
-            _mt5_req("POST", f"/users/current/accounts/"
+            host = _mt5_client_host(_dec(acc["tokenEnc"]))
+            _mt5_req("POST", f"{MTA_CLIENT}{host}/users/current/accounts/"
                              f"{acc['accountId']}/trade",
                      _dec(acc["tokenEnc"]),
-                     dict(action="POSITION_CLOSE", positionTicket=e["ticket"],
-                          symbol="XAUUSD", volume=e.get("lots")))
+                     dict(actionType="POSITION_CLOSE_ID",
+                          positionId=str(e["ticket"])))
             e["closed"] = True
         except Exception as ex:  # noqa: BLE001
             e["closeErr"] = str(ex)[:120]
@@ -2687,6 +2777,7 @@ def _research_loop():
                         _research_digest(r, res)
             if _cloud_mem.get("dirty"):
                 cloud_save(force=True)
+            _mt5_retry_stuck()
             if time.time() - r.get("lastIntelT", 0) >= INTEL_SCAN_S:
                 _research_intel()
             if time.time() - (r.get("llm") or {}).get("lastT", 0) \
@@ -3325,7 +3416,7 @@ def api_mt5_delete(aid):
     if acc.get("accountId"):
         try:
             _mt5_req("DELETE", f"/users/current/accounts/{acc['accountId']}",
-                     _dec(acc["tokenEnc"]))
+                     _dec(acc["tokenEnc"]), prov=True)
         except Exception:  # noqa: BLE001
             pass
     with STATE_LOCK:
@@ -3333,6 +3424,83 @@ def api_mt5_delete(aid):
         _save_state()
     cloud_save(force=True)
     return jsonify(ok=True)
+
+
+@app.route("/api/trades")
+def api_trades():
+    """Trade dashboard: everything the autonomous engine ever traded —
+    paper + live fills, stats, equity curve, open positions."""
+    ae = STATE.get("autoexec") or {}
+    closed_new = list(ae.get("closed") or [])          # newest first
+    closed_old = list(reversed(closed_new))            # oldest first
+    rs = [c.get("r") for c in closed_new
+          if isinstance(c.get("r"), (int, float))]
+    pnls = [c.get("pnl") for c in closed_new
+            if isinstance(c.get("pnl"), (int, float))]
+    stats = dict(n=len(closed_new), avgR=None, best=None, worst=None,
+                 winRate=None, streak=0, pnl=ae.get("totalPnl", 0.0))
+    if rs:
+        stats.update(avgR=round(sum(rs) / len(rs), 2),
+                     best=round(max(rs), 2), worst=round(min(rs), 2),
+                     winRate=round(100 * sum(1 for r in rs if r > 0)
+                                   / len(rs), 1))
+        for r in rs:                                   # current streak
+            sgn = 1 if r > 0 else -1
+            if stats["streak"] == 0 or                     (stats["streak"] > 0) == (sgn > 0):
+                stats["streak"] += sgn
+            else:
+                break
+    curve = [ae.get("startBalance") or 100.0] +         [c.get("balance") for c in closed_old
+         if isinstance(c.get("balance"), (int, float))]
+    return jsonify(
+        mode=ae.get("mode", "paper"),
+        balance=ae.get("balance"), equity=_ae_equity(ae) if ae else None,
+        startBalance=ae.get("startBalance", 100.0),
+        day=ae.get("day") or {}, stats=stats,
+        curve=[round(v, 2) for v in curve],
+        open=[dict(src=p.get("src"), dir=p.get("dir"), lots=p.get("lots"),
+                   entry=p.get("entry"), sl=p.get("sl"), tp1=p.get("tp1"),
+                   tp2=p.get("tp2"), openedAt=p.get("openedAt"),
+                   live=p.get("live") or [])
+              for p in (ae.get("positions") or [])],
+        closed=[dict(src=c.get("src"), dir=c.get("dir"), lots=c.get("lots"),
+                     entry=c.get("entry"), r=c.get("r"), pnl=c.get("pnl"),
+                     balance=c.get("balance"),
+                     openedAt=c.get("openedAt"),
+                     closedAt=c.get("closedAt"),
+                     result=c.get("result"), live=c.get("live") or [])
+                for c in closed_new[:40]],
+        accounts=[dict(label=a.get("label") or a.get("login"),
+                       login=a.get("login"), server=a.get("server"),
+                       state=a.get("state"), balance=a.get("balance"),
+                       currency=a.get("currency"), cent=a.get("cent"))
+                  for a in _mt5_accounts()])
+
+
+@app.route("/api/calendar")
+def api_calendar():
+    """Economic calendar for the dashboard: this week's gold-relevant
+    events with impact, forecast and previous."""
+    days = min(max(request.args.get("days", 7, type=int) or 7, 1), 10)
+    now = time.time()
+    wanted = ("USD", "All", "EUR", "GBP", "CNY", "JPY")
+    out, nxt = [], None
+    for e in fundamentals.calendar():
+        dt = e["ts"] - now
+        if dt > days * 86400:
+            break
+        if dt < -6 * 3600:            # keep a little past context out
+            continue
+        if e.get("country") not in wanted:
+            continue
+        ev = dict(ts=e["ts"], title=e.get("title"), country=e.get("country"),
+                  impact=e.get("impact"), forecast=e.get("forecast"),
+                  previous=e.get("previous"),
+                  minutesTo=int(dt // 60))
+        out.append(ev)
+        if nxt is None and dt > 0 and e.get("impact") == "High":
+            nxt = ev
+    return jsonify(events=out[:80], nextHigh=nxt, now=int(now))
 
 
 STATIC_DIR = os.path.join(BASE, "static")

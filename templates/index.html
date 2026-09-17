@@ -275,6 +275,34 @@
     border-radius:7px; padding:3px 9px; font-size:11.5px}
   .mt5-x:hover{color:var(--red); border-color:var(--red)}
 
+  /* trade dashboard + calendar */
+  .dash-chips{display:flex; gap:8px; flex-wrap:wrap}
+  .chip{background:var(--card2); border:1px solid var(--border); border-radius:9px;
+    padding:6px 10px; font-size:11.5px; color:var(--muted); line-height:1.35}
+  .chip b{display:block; font-size:13.5px; color:var(--text)}
+  .chip.good b{color:var(--green)} .chip.bad b{color:var(--red)}
+  .dash-tblwrap{max-height:260px; overflow-y:auto; margin-top:8px;
+    border:1px solid var(--border); border-radius:10px}
+  .dash-table{width:100%; border-collapse:collapse; font-size:12px}
+  .dash-table th{position:sticky; top:0; background:#101624; color:var(--muted);
+    text-align:left; font-size:10.5px; letter-spacing:.6px; text-transform:uppercase;
+    padding:7px 9px; border-bottom:1px solid var(--border)}
+  .dash-table td{padding:6px 9px; border-top:1px solid #1b253680; white-space:nowrap}
+  .dash-table tr.win td{color:#d6f5e3} .dash-table tr.loss td{color:#f9dcd9}
+  .pos-open{display:flex; gap:10px; flex-wrap:wrap; align-items:center;
+    padding:8px 10px; margin-bottom:8px; border:1px solid #2a3752;
+    border-radius:10px; background:#131b2d; font-size:12.5px}
+  .cal-day{font-size:10.5px; font-weight:800; letter-spacing:1.1px; color:var(--gold);
+    text-transform:uppercase; margin:10px 0 4px}
+  .cal-ev{display:flex; gap:8px; align-items:baseline; padding:4.5px 0;
+    border-top:1px dashed rgba(148,163,184,.12); font-size:12.5px; flex-wrap:wrap}
+  .cal-t{width:44px; flex:none; color:var(--muted); font-size:11.5px}
+  .cal-i{width:9px; height:9px; border-radius:3px; flex:none; align-self:center;
+    background:#3a465e}
+  .cal-i.High{background:var(--red)} .cal-i.Medium{background:var(--amber)}
+  .cal-c{width:34px; flex:none; font-weight:700; font-size:11px}
+  .cal-x{color:var(--muted); font-size:11px}
+
   .fn-macro{display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:6px}
   .fn-chip{background:var(--card2); border:1px solid var(--border); border-radius:8px;
     padding:5px 10px; font-size:12.5px; white-space:nowrap}
@@ -508,6 +536,25 @@
           used only to connect <b>your own</b> account. Standard MT5 brokers work
           too — just type the exact server name from your MT5 app.
         </div>
+      </div>
+
+      <div class="card" id="dashCard">
+        <div class="card-head"><h2>📈 Trade Dashboard</h2>
+          <span class="muted small" id="dashSum">loading trades…</span></div>
+        <div class="dash-chips" id="dashChips"></div>
+        <canvas id="eqChart" height="92" style="width:100%; display:block; margin:10px 0 4px"></canvas>
+        <div id="dashOpen"></div>
+        <div class="dash-tblwrap"><table class="dash-table" id="dashTable">
+          <thead><tr><th>when</th><th>src</th><th>dir</th><th>lots</th>
+            <th>R</th><th>P&amp;L</th><th>balance</th><th>live</th></tr></thead>
+          <tbody id="dashRows"><tr><td colspan="8" class="muted small">no trades yet — the engine trades every signal automatically</td></tr></tbody>
+        </table></div>
+      </div>
+
+      <div class="card" id="calCard">
+        <div class="card-head"><h2>📅 Economic Calendar</h2>
+          <span class="muted small" id="calNext"></span></div>
+        <div id="calBody"><div class="muted small">loading this week's events…</div></div>
       </div>
 
       <div class="card">
@@ -2351,6 +2398,117 @@ const INITIAL = {{ payload|tojson }};
   });
   setInterval(mt5Load, 20000);
   mt5Load();
+
+  // ---------- trade dashboard ----------
+  function drawEq(pts){
+    const cv = $('eqChart'); if(!cv || !pts || pts.length < 2) return;
+    const dpr = window.devicePixelRatio || 1;
+    const w = cv.clientWidth || 300, h = 92;
+    cv.width = w * dpr; cv.height = h * dpr;
+    const x = cv.getContext('2d'); x.scale(dpr, dpr);
+    const min = Math.min(...pts), max = Math.max(...pts), pad = 6;
+    const sx = i => pad + i * (w - 2 * pad) / (pts.length - 1);
+    const sy = v => max === min ? h / 2 : pad + (max - v) * (h - 2 * pad) / (max - min);
+    const up = pts[pts.length - 1] >= pts[0];
+    x.clearRect(0, 0, w, h);
+    x.strokeStyle = 'rgba(148,163,184,.16)'; x.lineWidth = 1;
+    x.beginPath(); x.moveTo(0, sy(pts[0])); x.lineTo(w, sy(pts[0])); x.stroke();
+    const grad = x.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0, up ? 'rgba(38,211,111,.28)' : 'rgba(245,73,61,.28)');
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    x.beginPath(); x.moveTo(sx(0), sy(pts[0]));
+    pts.forEach((v, i) => x.lineTo(sx(i), sy(v)));
+    x.lineTo(sx(pts.length - 1), h); x.lineTo(sx(0), h); x.closePath();
+    x.fillStyle = grad; x.fill();
+    x.beginPath(); x.moveTo(sx(0), sy(pts[0]));
+    pts.forEach((v, i) => x.lineTo(sx(i), sy(v)));
+    x.strokeStyle = up ? '#26d36f' : '#f5493d'; x.lineWidth = 1.8; x.stroke();
+    x.fillStyle = '#8b95a8'; x.font = '10px ui-monospace,monospace';
+    x.fillText('$' + max.toFixed(2), 4, 10);
+    x.fillText('$' + min.toFixed(2), 4, h - 3);
+  }
+  async function dashLoad(){
+    try{
+      const r = await apiFetch('/api/trades');
+      const j = await r.json();
+      const s = j.stats || {}, day = j.day || {};
+      $('dashSum').textContent = (j.mode || 'paper').toUpperCase()
+        + ' · equity $' + (j.equity != null ? j.equity.toFixed(2) : '—')
+        + ' · today ' + (day.pnl >= 0 ? '+' : '') + (day.pnl || 0).toFixed(2) + '$';
+      const streak = (s.streak || 0);
+      $('dashChips').innerHTML =
+        '<div class="chip">trades<b>' + (s.n || 0) + '</b></div>'
+        + '<div class="chip">win rate<b>' + (s.winRate != null ? s.winRate + '%' : '—') + '</b></div>'
+        + '<div class="chip">avg R<b>' + (s.avgR != null ? (s.avgR >= 0 ? '+' : '') + s.avgR.toFixed(2) + 'R' : '—') + '</b></div>'
+        + '<div class="chip ' + ((s.pnl || 0) >= 0 ? 'good' : 'bad') + '">total P&L<b>'
+        + (s.pnl >= 0 ? '+' : '') + s.pnl.toFixed(2) + '$</b></div>'
+        + '<div class="chip">best / worst<b>' + (s.best != null ? s.best.toFixed(2) + 'R / ' + s.worst.toFixed(2) + 'R' : '—') + '</b></div>'
+        + '<div class="chip ' + (streak > 0 ? 'good' : (streak < 0 ? 'bad' : '')) + '">streak<b>'
+        + (streak > 0 ? streak + ' wins' : streak < 0 ? (-streak) + ' losses' : '—') + '</b></div>';
+      drawEq(j.curve || []);
+      const ops = j.open || [];
+      $('dashOpen').innerHTML = ops.length ? ops.map(p =>
+        '<div class="pos-open"><span>' + (p.dir === 'LONG' ? '🟢' : '🔴') + '</span>'
+        + '<b>' + p.src + '</b>'
+        + '<span class="mono">' + p.lots + ' lots @ ' + Number(p.entry).toFixed(2) + '</span>'
+        + '<span class="muted">SL ' + Number(p.sl).toFixed(2) + ' · TP ' + Number(p.tp2).toFixed(2) + '</span>'
+        + (p.live && p.live.length ? '<span style="color:var(--gold)">🌐 live ×' + p.live.length + '</span>' : '')
+        + '</div>').join('') : '';
+      const rows = j.closed || [];
+      $('dashRows').innerHTML = rows.length ? rows.map(c => {
+        const d = new Date((c.closedAt || 0) * 1000);
+        const t = d.toLocaleDateString(undefined, {month: 'short', day: '2-digit'})
+          + ' ' + d.toLocaleTimeString(undefined, {hour: '2-digit', minute: '2-digit'});
+        return '<tr class="' + (c.pnl > 0 ? 'win' : c.pnl < 0 ? 'loss' : '') + '">'
+          + '<td class="muted">' + t + '</td><td>' + c.src + '</td>'
+          + '<td>' + (c.dir === 'LONG' ? '🟢' : '🔴') + '</td>'
+          + '<td class="mono">' + c.lots + '</td>'
+          + '<td class="mono">' + (c.r >= 0 ? '+' : '') + Number(c.r).toFixed(2) + '</td>'
+          + '<td class="mono">' + (c.pnl >= 0 ? '+' : '') + Number(c.pnl).toFixed(2) + '$</td>'
+          + '<td class="mono muted">' + Number(c.balance).toFixed(2) + '</td>'
+          + '<td>' + (c.live && c.live.length ? '🌐' : '') + '</td></tr>';
+      }).join('') : '<tr><td colspan="8" class="muted small">no trades yet — the engine trades every signal automatically</td></tr>';
+    }catch(e){}
+  }
+  setInterval(dashLoad, 15000);
+  dashLoad();
+
+  // ---------- economic calendar ----------
+  async function calLoad(){
+    try{
+      const r = await apiFetch('/api/calendar?days=7');
+      const j = await r.json();
+      if(j.nextHigh){
+        const m = j.nextHigh.minutesTo;
+        $('calNext').textContent = 'next high-impact in '
+          + (m >= 60 ? Math.floor(m / 60) + 'h' + m % 60 + 'm' : m + 'm')
+          + ' · ' + j.nextHigh.country + ' ' + j.nextHigh.title;
+      } else { $('calNext').textContent = 'next 7 days'; }
+      const evs = j.events || [];
+      if(!evs.length){
+        $('calBody').innerHTML = '<div class="muted small">no events in the window</div>';
+        return;
+      }
+      let html = '', lastDay = '';
+      for(const e of evs){
+        const d = new Date(e.ts * 1000);
+        const day = d.toLocaleDateString(undefined,
+          {weekday: 'short', day: '2-digit', month: 'short'});
+        if(day !== lastDay){ html += '<div class="cal-day">' + day + '</div>'; lastDay = day; }
+        html += '<div class="cal-ev"><span class="cal-t">'
+          + d.toLocaleTimeString(undefined, {hour: '2-digit', minute: '2-digit'})
+          + '</span><span class="cal-i ' + e.impact + '"></span>'
+          + '<span class="cal-c">' + e.country + '</span><span>'
+          + e.title + '</span>'
+          + (e.forecast ? '<span class="cal-x">f ' + e.forecast + '</span>' : '')
+          + (e.previous ? '<span class="cal-x">p ' + e.previous + '</span>' : '')
+          + '</div>';
+      }
+      $('calBody').innerHTML = html;
+    }catch(e){}
+  }
+  setInterval(calLoad, 300000);
+  calLoad();
 
   // ---------- broker sync ----------
   function showSyncState(off){

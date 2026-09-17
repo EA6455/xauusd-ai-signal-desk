@@ -864,6 +864,7 @@ def _ae_open(src, key, direction, entry, sl, tp1, tp2):
                tp1=round(float(tp1), 2), tp2=round(float(tp2), 2),
                lots=lots, riskAmt=risk_amt, openedAt=int(time.time()))
     pos["live"] = _mt5_exec_live(pos, stop)   # real MT5 accounts, if any
+    _cloud_dirty()
     ae.setdefault("positions", []).append(pos)
     day["trades"] += 1
     ae["totalTrades"] = ae.get("totalTrades", 0) + 1
@@ -921,6 +922,7 @@ def _ae_close(tr):
     with STATE_LOCK:
         STATE["autoexec"] = ae
         _save_state()
+    cloud_save(force=True)
     ic = "✅" if pnl >= 0 else "❌"
     extra = ("\n🛑 daily loss limit hit — auto-trading paused until "
              "tomorrow" if day.get("paused") else "")
@@ -1017,6 +1019,7 @@ def _mt5_provision_thread(acc):
     with STATE_LOCK:
         STATE["mt5"] = _mt5_accounts()
         _save_state()
+    cloud_save(force=True)
     if acc["state"] == "connected":
         _notify(f"🔗 MT5 CONNECTED · {acc.get('label') or acc['login']}\n\n"
                 f"🏦 {acc['server']}\n"
@@ -2273,7 +2276,7 @@ def _research_status():
         lines.append("🧠 LLM researcher: provider error — retrying hourly")
     else:
         lines.append("🧠 LLM researcher: add OPENAI_API_KEY to activate")
-    ae = STATE.get("autoexec")
+    ae = STATE.get("autoexec") or {}
     if ae.get("enabled"):
         eq = _ae_equity(ae, px)
         st = ae.get("startBalance") or 100.0
@@ -2682,6 +2685,8 @@ def _research_loop():
                     if time.time() - r.get("lastDigestT", 0) \
                             >= RESEARCH_DIGEST_S:
                         _research_digest(r, res)
+            if _cloud_mem.get("dirty"):
+                cloud_save(force=True)
             if time.time() - r.get("lastIntelT", 0) >= INTEL_SCAN_S:
                 _research_intel()
             if time.time() - (r.get("llm") or {}).get("lastT", 0) \
@@ -2755,8 +2760,103 @@ def start_background():
         fcntl.flock(_bg_lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except Exception:  # noqa: BLE001  — another worker already owns the loop
         return
+    cloud_load()                        # restore MT5 accounts + engine
+    _ae()                               # ensure the auto-trade engine exists
     threading.Thread(target=_background_loop, daemon=True).start()
     threading.Thread(target=_research_loop, daemon=True).start()
+
+
+# ------------------------------------------------- cross-deploy persistence
+# Render wipes the service disk on every deploy, so connected MT5 accounts
+# and the auto-trade engine live in a PRIVATE GitHub repo (credentials are
+# additionally encrypted before they leave this server). The token comes
+# from the GH_STATE_PAT env var — never from code.
+
+STATE_REPO = "EA6455/xauusd-ai-state"
+_cloud_mem = {"t": 0.0, "sha": None, "busy": False, "dirty": False}
+
+
+def _cloud_dirty():
+    _cloud_mem["dirty"] = True
+
+
+def _cloud_req(method, path, body=None, timeout=20):
+    tok = os.environ.get("GH_STATE_PAT")
+    if not tok:
+        return None
+    import urllib.request
+    req = urllib.request.Request(
+        "https://api.github.com" + path,
+        data=json.dumps(body).encode() if body is not None else None,
+        headers={"Authorization": f"token {tok}",
+                 "Accept": "application/vnd.github+json",
+                 "User-Agent": "xauusd-ai-desk/1.0"}, method=method)
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        raw = r.read().decode()
+    return json.loads(raw) if raw else {}
+
+
+def cloud_load():
+    """Restore MT5 accounts + auto-trade engine after a deploy wiped the
+    local disk."""
+    try:
+        j = _cloud_req("GET", f"/repos/{STATE_REPO}/contents/state.json")
+        if not j or j.get("content") is None:
+            return False
+        import base64
+        blob = json.loads(base64.b64decode(j["content"]))
+        _cloud_mem["sha"] = j.get("sha")
+        with STATE_LOCK:
+            if blob.get("mt5") and not STATE.get("mt5"):
+                STATE["mt5"] = blob["mt5"]
+            if blob.get("autoexec") and not STATE.get("autoexec"):
+                STATE["autoexec"] = blob["autoexec"]
+            _save_state()
+        return True
+    except Exception:  # noqa: BLE001  — 404 (nothing saved yet) or offline
+        return False
+
+
+def cloud_save(force=False):
+    """Persist MT5 accounts + engine stats to the private repo so they
+    survive the next deploy. Debounced; call with force=True on real
+    changes (connect/disconnect/fill/close)."""
+    now = time.time()
+    if _cloud_mem["busy"]:
+        return
+    if not force and now - _cloud_mem["t"] < 90:
+        return
+    _cloud_mem.update(busy=True, t=now, dirty=False)
+    try:
+        import base64
+        blob = dict(mt5=STATE.get("mt5") or [],
+                    autoexec=STATE.get("autoexec"))
+        body = dict(message="state sync",
+                    content=base64.b64encode(
+                        json.dumps(blob).encode()).decode())
+        if _cloud_mem.get("sha"):
+            body["sha"] = _cloud_mem["sha"]
+        try:
+            j = _cloud_req("PUT", f"/repos/{STATE_REPO}/contents/"
+                                  f"state.json", body)
+            _cloud_mem["sha"] = ((j.get("content") or {}).get("sha")
+                                 or _cloud_mem.get("sha"))
+        except Exception:  # noqa: BLE001  — stale sha: refetch and retry
+            try:
+                g = _cloud_req("GET", f"/repos/{STATE_REPO}/contents/"
+                                      f"state.json")
+                _cloud_mem["sha"] = g.get("sha")
+                body["sha"] = g.get("sha")
+                j = _cloud_req("PUT", f"/repos/{STATE_REPO}/contents/"
+                                      f"state.json", body)
+                _cloud_mem["sha"] = ((j.get("content") or {}).get("sha")
+                                     or _cloud_mem.get("sha"))
+            except Exception:  # noqa: BLE001
+                _cloud_mem["dirty"] = True     # try again on a later tick
+    except Exception:  # noqa: BLE001
+        _cloud_mem["dirty"] = True
+    finally:
+        _cloud_mem["busy"] = False
 
 
 # ------------------------------------------------------------- trader note
@@ -3198,6 +3298,7 @@ def api_mt5_connect():
         _save_state()
     threading.Thread(target=_mt5_provision_thread, args=(acc,),
                      daemon=True).start()
+    _cloud_dirty()
     return jsonify(ok=True, id=acc["id"])
 
 
@@ -3230,6 +3331,7 @@ def api_mt5_delete(aid):
     with STATE_LOCK:
         STATE["mt5"] = [a for a in _mt5_accounts() if a.get("id") != aid]
         _save_state()
+    cloud_save(force=True)
     return jsonify(ok=True)
 
 

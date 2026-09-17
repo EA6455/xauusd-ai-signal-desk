@@ -3224,7 +3224,9 @@ def _mtf_scan():
             continue
         i_last = pack["n"] - 2
         trend = MTF_TREND.get(int(pack["struct"][i_last]), "RANGE")
-        px = float(spot or cl[-1]["c"])
+        # zone detection in CANDLE space (same as the engine's own radar
+        # and the panel) — never mix spot quotes with candle-space zones
+        px = float(cl[-1]["c"])
         try:
             zones = entries.zone_radar(cl, None, price=px, max_zones=3)
         except Exception:  # noqa: BLE001

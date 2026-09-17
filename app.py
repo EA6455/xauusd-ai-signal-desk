@@ -1081,7 +1081,7 @@ def _mt5_provision_thread(acc, tries=None):
                         "broker rejected the connection — check the MT5 "
                         "login, password and server name, then press "
                         "Connect again")
-            except _Mt5Error:
+            except Exception:  # noqa: BLE001  timeout / transient — keep polling
                 continue
         if last != "CONNECTED":
             raise RuntimeError(f"terminal state: {last or 'unreachable'} "

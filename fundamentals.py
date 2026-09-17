@@ -74,14 +74,45 @@ def _strip_tags(s):
 FAIL_BACKOFF = 600                 # retry a dead source at most every 10 min
 
 
+def _calendar_cloud():
+    """Calendar shared via the private state repo: whichever machine can
+    reach the feed pushes calendar.json; blocked machines read it."""
+    import os
+    import base64
+    tok = os.environ.get("GH_STATE_PAT")
+    if not tok:
+        return []
+    try:
+        req = urllib.request.Request(
+            "https://api.github.com/repos/EA6455/xauusd-ai-state/contents/"
+            "calendar.json",
+            headers={"Authorization": f"token {tok}",
+                     "Accept": "application/vnd.github+json",
+                     "User-Agent": UA.get("User-Agent", "xauusd-ai")})
+        with urllib.request.urlopen(req, timeout=12) as r:
+            j = json.loads(r.read().decode())
+        blob = json.loads(base64.b64decode(j["content"]))
+        if time.time() - (blob.get("fetchedAt") or 0) > 6 * 3600 + 1800:
+            return []
+        return blob.get("events") or []
+    except Exception:  # noqa: BLE001
+        return []
+
+
 def calendar(max_age=6 * 3600):
     """This + next week's events as dicts (ts, title, country, impact,
-    forecast, previous). Weekly data -> cached 6 hours; failures back off."""
+    forecast, previous). Weekly data -> cached 6 hours; failures back off
+    and fall back to the shared cloud copy."""
     now = time.time()
     if now - _cal_mem["t"] < max_age and _cal_mem["events"]:
         return _cal_mem["events"]
     if now - _cal_mem.get("failT", 0) < FAIL_BACKOFF:
-        return _cal_mem["events"]          # source recently failed — back off
+        if _cal_mem["events"]:
+            return _cal_mem["events"]      # source recently failed — back off
+        ev = _calendar_cloud()             # blocked here? use the shared copy
+        if ev:
+            _cal_mem.update(t=now, events=ev)
+        return _cal_mem["events"]
     events = []
     for url in (CAL_URL, CAL_NEXT_URL):
         try:
@@ -98,6 +129,8 @@ def calendar(max_age=6 * 3600):
         except Exception:  # noqa: BLE001
             continue
     events.sort(key=lambda e: e["ts"])
+    if not events:
+        events = _calendar_cloud()
     if events:
         _cal_mem.update(t=now, events=events)
     else:

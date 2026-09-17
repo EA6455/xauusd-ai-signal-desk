@@ -2785,6 +2785,7 @@ def _research_loop():
             if _cloud_mem.get("dirty"):
                 cloud_save(force=True)
             _mt5_retry_stuck()
+            _calendar_share()
             if time.time() - r.get("lastIntelT", 0) >= INTEL_SCAN_S:
                 _research_intel()
             if time.time() - (r.get("llm") or {}).get("lastT", 0) \
@@ -2955,6 +2956,50 @@ def cloud_save(force=False):
         _cloud_mem["dirty"] = True
     finally:
         _cloud_mem["busy"] = False
+
+
+def _calendar_share():
+    """Keep the shared cloud calendar fresh: the machine that CAN reach
+    the forex-calendar feed pushes it to the private state repo; machines
+    the feed blocks (datacenter IP limits) read it via the fallback."""
+    try:
+        evs = fundamentals.calendar()
+        if not evs:
+            return
+        sha, fetched_at = None, 0
+        try:
+            j = _cloud_req("GET", f"/repos/{STATE_REPO}/contents/"
+                                  f"calendar.json")
+            if j and j.get("content") is not None:
+                import base64
+                sha = j.get("sha")
+                try:
+                    blob = json.loads(base64.b64decode(j["content"]))
+                    fetched_at = blob.get("fetchedAt") or 0
+                except Exception:  # noqa: BLE001
+                    fetched_at = 0
+        except Exception:  # noqa: BLE001  — 404 on first push
+            pass
+        if time.time() - fetched_at < 1800:
+            return                              # cloud copy is fresh enough
+        import base64
+        body = dict(message="calendar share",
+                    content=base64.b64encode(json.dumps(dict(
+                        fetchedAt=int(time.time()), events=evs)).encode()
+                    ).decode())
+        if sha:
+            body["sha"] = sha
+        try:
+            _cloud_req("PUT", f"/repos/{STATE_REPO}/contents/calendar.json",
+                       body)
+        except Exception:  # noqa: BLE001  — stale sha: refetch and retry
+            j = _cloud_req("GET", f"/repos/{STATE_REPO}/contents/"
+                                  f"calendar.json")
+            body["sha"] = (j or {}).get("sha")
+            _cloud_req("PUT", f"/repos/{STATE_REPO}/contents/calendar.json",
+                       body)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 # ------------------------------------------------------------- trader note

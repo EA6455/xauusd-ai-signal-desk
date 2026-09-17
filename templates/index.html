@@ -2399,6 +2399,22 @@ const INITIAL = {{ payload|tojson }};
     }catch(e){ toast('⚠ Connect failed'); }
     finally{ $('mt5Connect').textContent = 'Connect & let it trade'; }
   });
+  let mt5SrvTimer = null;
+  $('mt5Server').addEventListener('input', () => {
+    clearTimeout(mt5SrvTimer);
+    const q = $('mt5Server').value.trim();
+    if(q.length < 3) return;
+    mt5SrvTimer = setTimeout(async () => {
+      try{
+        const r = await apiFetch('/api/mt5/servers?q=' + encodeURIComponent(q));
+        const j = await r.json();
+        const dl = $('mt5Servers');
+        dl.innerHTML = (j.servers || []).slice(0, 25).map(s =>
+          '<option value="' + s + '"></option>').join('');
+      }catch(e){}
+    }, 400);
+  });
+
   setInterval(mt5Load, 20000);
   mt5Load();
 

@@ -1104,7 +1104,7 @@ def _mt5_provision_thread(acc, tries=None):
         acc["err"] = None
     except Exception as e:  # noqa: BLE001
         acc["state"] = "error"
-        acc["err"] = str(e)[:200]
+        acc["err"] = str(e)[:400]
     with STATE_LOCK:
         STATE["mt5"] = _mt5_accounts()
         _save_state()
@@ -3496,6 +3496,36 @@ def api_mt5_accounts():
                    totalTrades=ae.get("totalTrades"),
                    totalPnl=ae.get("totalPnl")),
         servers=list(EXNESS_SERVERS))
+
+
+_mt5_srv_mem = {"q": "", "t": 0.0, "servers": []}
+
+
+@app.route("/api/mt5/servers")
+def api_mt5_servers():
+    """Live server-name search over MetaApi's broker registry, so people
+    always connect with the exact server name from their MT5 app."""
+    q = (request.args.get("q") or "").strip()
+    if len(q) < 3:
+        return jsonify(servers=[])
+    now = time.time()
+    if _mt5_srv_mem["q"] == q and now - _mt5_srv_mem["t"] < 600:
+        return jsonify(servers=_mt5_srv_mem["servers"])
+    tok = _mt5_sys_token()
+    if not tok:
+        return jsonify(servers=list(EXNESS_SERVERS))
+    try:
+        import urllib.parse
+        j = _mt5_req("GET", "/known-mt-servers/5/search?query="
+                     + urllib.parse.quote(q), tok, prov=True)
+        out = []
+        for _broker, servers in (j or {}).items():
+            out.extend(servers or [])
+        out = sorted(set(out))[:40]
+        _mt5_srv_mem.update(q=q, t=now, servers=out)
+        return jsonify(servers=out)
+    except Exception:  # noqa: BLE001
+        return jsonify(servers=list(EXNESS_SERVERS))
 
 
 @app.route("/api/mt5/connect", methods=["POST"])

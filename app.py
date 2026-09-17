@@ -1707,60 +1707,101 @@ def _self_keepalive():
 
 
 # ------------------------------------------------------- 24/7 AI research
-_research_mem = {"t": 0.0}
+RESEARCH_SCAN_S = 60         # full research scan every 60 seconds
+RESEARCH_STATUS_S = 30       # live status message edited every 30 seconds
+RESEARCH_DIGEST_S = 3600     # full digest posted every hour
 
 
-def research_cycle(force=False):
-    """One 24/7 AI research cycle: fresh 15m data -> backtest the production
-    strategy + challenger variants -> learn out-of-sample since session start
-    -> digest everything to the group's DEVELOP topic. Hourly, forever (the
-    Render self-ping keeps the service awake around the clock)."""
-    now = time.time()
-    if not force and now - _research_mem["t"] < 3300:
-        return
-    _research_mem["t"] = now
+def _fmt_r(st):
+    if not st or not st.get("n"):
+        return "n=0"
+    return (f"n={st['n']} · {round((st['win'] or 0) * 100)}% · "
+            f"{st['avgR']:+.2f}R")
+
+
+def _tg_post_topic(text, thread_id):
+    """Send to the forum group topic; return the new message_id or None."""
+    if not (TG_TOKEN and TG_CHATS):
+        return None
+    group = next((c for c in TG_CHATS if c.startswith("-100")), None)
+    if not group:
+        return None
+    import urllib.request
+    payload = {"chat_id": group, "text": text,
+               "message_thread_id": int(thread_id)}
+    req = urllib.request.Request(
+        f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"})
     try:
-        d = data.get_candles("15m", force=True).get("candles")
+        r = json.load(urllib.request.urlopen(req, timeout=10))
+        return (r.get("result") or {}).get("message_id")
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _tg_edit(chat, message_id, text):
+    import urllib.request
+    payload = {"chat_id": chat, "message_id": int(message_id), "text": text}
+    req = urllib.request.Request(
+        f"https://api.telegram.org/bot{TG_TOKEN}/editMessageText",
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"})
+    urllib.request.urlopen(req, timeout=10)
+
+
+def _research_scan(force_data=False):
+    """One research pass over the freshest 15m data: backtest production +
+    challenger variants, learn out-of-sample, store results. Runs every
+    minute, 24/7 — caches make each pass cheap."""
+    try:
+        d = data.get_candles("15m", force=force_data).get("candles")
     except Exception:  # noqa: BLE001
         d = None
     if not d or len(d) < 400:
-        return
+        return None
     r = STATE.get("research") or {}
     if not r.get("sessionStartT"):
-        r = dict(sessionStartT=d[-1]["t"], cycles=0, startedAt=int(now))
+        r = dict(sessionStartT=d[-1]["t"], cycles=0, scans=0,
+                 startedAt=int(time.time()))
     res = entries.research_variants(d, since_ts=r["sessionStartT"])
     if not res:
-        return
-    r["cycles"] = r.get("cycles", 0) + 1
-    r["lastCycleT"] = int(now)
+        return None
+    r["scans"] = r.get("scans", 0) + 1
+    r["lastScanT"] = int(time.time())
     r["last"] = res
     with STATE_LOCK:
         STATE["research"] = r
         _save_state()
+    return r, res
 
-    def _fmt(st):
-        if not st or not st.get("n"):
-            return "n=0"
-        return (f"n={st['n']} · {round((st['win'] or 0) * 100)}% · "
-                f"{st['avgR']:+.2f}R")
 
+def _research_digest(r, res):
+    """Hourly full digest -> DEVELOP topic only."""
+    r["cycles"] = r.get("cycles", 0) + 1
+    r["lastDigestT"] = int(time.time())
+    with STATE_LOCK:
+        STATE["research"] = r
+        _save_state()
     p = res["production"]
     lines = [
-        f"🔬 AI RESEARCH · cycle {r['cycles']} · {res['bars']:,} bars · 15m",
+        f"🔬 AI RESEARCH · digest {r['cycles']} · "
+        f"{r.get('scans', 0)} scans · {res['bars']:,} bars · 15m",
         "",
         "🏭 PRODUCTION (delta-confirmed 1:2 · 1000-pip cap)",
-        f"window: {_fmt(p['full'])}",
-        f"OOS since session start: {_fmt(p['oos'])}",
+        f"window: {_fmt_r(p['full'])}",
+        f"OOS since session start: {_fmt_r(p['oos'])}",
         "",
         "⚖ CHALLENGERS (window | out-of-sample)",
     ]
     for v in res["variants"]:
-        lines.append(f"• {v['name']}: {_fmt(v['full'])} | {_fmt(v['oos'])}")
+        lines.append(f"• {v['name']}: {_fmt_r(v['full'])} | "
+                     f"{_fmt_r(v['oos'])}")
     lines += [
         "",
         "🩺 ENGINE HEALTH",
-        f"• sweeps A+/B+: {_fmt(res['sweeps'])}",
-        f"• rotation flips: {_fmt(res['rotation'])}",
+        f"• sweeps A+/B+: {_fmt_r(res['sweeps'])}",
+        f"• rotation flips: {_fmt_r(res['rotation'])}",
     ]
     cands = []
     po = p["oos"]
@@ -1772,25 +1813,117 @@ def research_cycle(force=False):
                 cands.append(f"{v['name']} (oos {vo['avgR']:+.2f}R vs "
                              f"prod {po['avgR']:+.2f}R · n={vo['n']})")
     if cands:
-        lines += ["", "🔬 CANDIDATES — beating production out-of-sample:"]
+        lines += ["", "🔬 CANDIDATES — beating production "
+                  "out-of-sample:"]
         lines += [f"  → {c}" for c in cands]
     else:
-        lines += ["", "🔬 candidates: none yet (needs OOS n≥3 and +0.15R edge)"]
+        lines += ["", "🔬 candidates: none yet "
+                  "(needs OOS n≥3 and +0.15R edge)"]
     _notify("\n".join(lines), cat="develop")
+
+
+def _research_status():
+    """Keep ONE live status message in the DEVELOP topic showing the AI is
+    online 24/7: uptime timer, scan countdown, activity, live results.
+    Edited every 30s (no message spam) — recreated if it gets deleted."""
+    r = STATE.get("research") or {}
+    if not r.get("startedAt") or not r.get("last"):
+        return
+    res = r["last"]
+    now = time.time()
+    up = int(now - r.get("startedAt", now))
+    uh, rem = divmod(up, 3600)
+    um, us = divmod(rem, 60)
+    last_scan = int(now - r.get("lastScanT", now))
+    next_scan = max(0, RESEARCH_SCAN_S - last_scan)
+    try:
+        px, _s = tick_spot(broker=False)
+    except Exception:  # noqa: BLE001
+        px = None
+    p = (res.get("production") or {}).get("full") or {}
+    oos = (res.get("production") or {}).get("oos") or {}
+    cands = 0
+    if oos.get("n") and oos.get("avgR") is not None:
+        cands = sum(1 for v in res.get("variants", [])
+                    if (v.get("oos") or {}).get("n", 0) >= 3
+                    and (v.get("oos") or {}).get("avgR") is not None
+                    and v["oos"]["avgR"] > oos["avgR"] + 0.15)
+    lines = [
+        "🟢 AI ONLINE 24/7 · RESEARCH MODE",
+        f"⏱ uptime {uh:02d}:{um:02d}:{us:02d}",
+        f"🔁 scans {r.get('scans', 0)} · digests "
+        f"{r.get('cycles', 0)} · next scan in {next_scan}s",
+        f"⚙ activity: scanning {res.get('bars', 0):,} bars · "
+        f"{len(res.get('variants', []))} challengers · OOS learning",
+    ]
+    if px:
+        lines.append(f"💰 XAUUSD {px:,.1f} (live)")
+    if p.get("n"):
+        lines.append(f"🏭 production "
+                     f"{round((p.get('win') or 0) * 100)}% · "
+                     f"{p.get('avgR', 0):+.2f}R · n={p['n']}")
+    if oos.get("n"):
+        lines.append(f"🔬 OOS {round((oos.get('win') or 0) * 100)}% "
+                     f"· {oos.get('avgR', 0):+.2f}R · n={oos['n']}")
+    lines.append(f"🧪 candidates beating production: {cands}")
+    ld = r.get("lastDigestT")
+    if ld:
+        nxt = max(0, (RESEARCH_DIGEST_S - int(now - ld)) // 60)
+        lines.append(f"📊 next full digest in {nxt} min")
+    else:
+        lines.append("📊 first digest posting with first scan")
+    lines.append(f"🌂 {time.strftime('%H:%M:%S', time.gmtime(now))}"
+                 " UTC · this status updates live every 30s")
+    txt = "\n".join(lines)
+
+    sm = r.get("statusMsg") or {}
+    if sm.get("id"):
+        try:
+            _tg_edit(sm["chat"], sm["id"], txt)
+            return
+        except Exception:  # noqa: BLE001 — deleted/edited message: recreate
+            pass
+    mid = _tg_post_topic(txt, _tg_topics().get("develop") or 1)
+    if mid:
+        r["statusMsg"] = dict(
+            chat=next((c for c in TG_CHATS if c.startswith("-100")), ""),
+            id=mid)
+        with STATE_LOCK:
+            STATE["research"] = r
+            _save_state()
+
+
+def research_cycle(force=False):
+    """Scan + digest in one call (used by tests and the hourly path)."""
+    got = _research_scan(force_data=force)
+    if not got:
+        return None
+    r, res = got
+    _research_digest(r, res)
     return res
 
 
 def _research_loop():
-    """Always-on research daemon: first cycle 3 min after boot (caches warm),
-    then hourly — 24/7 non-stop. Only the flock-owning worker runs it."""
-    time.sleep(180)
+    """Always-on research daemon: live status message edited every 30s
+    (uptime timer, scan countdown, activity), full research scan every 60s,
+    hourly digest to the DEVELOP topic — 24/7 non-stop. Only the
+    flock-owning worker runs it."""
+    time.sleep(120)
     while True:
         try:
-            research_cycle()
+            r = STATE.get("research") or {}
+            if time.time() - r.get("lastScanT", 0) >= RESEARCH_SCAN_S:
+                got = _research_scan()
+                if got:
+                    r, res = got
+                    if time.time() - r.get("lastDigestT", 0) \
+                            >= RESEARCH_DIGEST_S:
+                        _research_digest(r, res)
+            _research_status()
         except Exception:  # noqa: BLE001
             import traceback
             traceback.print_exc()
-        time.sleep(3600)
+        time.sleep(RESEARCH_STATUS_S)
 
 
 def _background_loop():

@@ -2571,17 +2571,16 @@ def health():
                                  lastCycleT=r.get("lastCycleT"),
                                  scans=r.get("scans", 0),
                                  lastScanT=r.get("lastScanT"),
-                                 statusMsg=(r.get("statusMsg") or {}).get("id")))
+                                 statusMsg=(r.get("statusMsg") or {}).get("id"),
+                                 intelHeadlines=len(
+                                     (r.get("intel") or {}).get("headlines") or []),
+                                 lastIntelT=r.get("lastIntelT"),
+                                 llm=(r.get("llm") or {}).get("state")))
 
 
 # Start the realtime feed + background loop at import time so WSGI servers
 # (gunicorn in the Dockerfile) get it too — start_background() is idempotent
 # and an flock keeps it to ONE loop per machine even with multiple workers.
-start_background()
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=7860, threaded=True, debug=False)
-
 start_background()
 
 if __name__ == "__main__":

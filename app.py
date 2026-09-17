@@ -863,6 +863,7 @@ def _ae_open(src, key, direction, entry, sl, tp1, tp2):
                entry=round(entry, 2), sl=round(float(sl), 2),
                tp1=round(float(tp1), 2), tp2=round(float(tp2), 2),
                lots=lots, riskAmt=risk_amt, openedAt=int(time.time()))
+    pos["live"] = _mt5_exec_live(pos, stop)   # real MT5 accounts, if any
     ae.setdefault("positions", []).append(pos)
     day["trades"] += 1
     ae["totalTrades"] = ae.get("totalTrades", 0) + 1
@@ -871,13 +872,23 @@ def _ae_open(src, key, direction, entry, sl, tp1, tp2):
         _save_state()
     ic = "🟢" if direction == "LONG" else "🔴"
     act = "BUY" if direction == "LONG" else "SELL"
+    live_txt = ""
+    if pos.get("live"):
+        parts = []
+        for e in pos["live"]:
+            if e.get("ticket"):
+                parts.append(f"{e['login']} · {e['lots']} lots · "
+                             f"#{e['ticket']}")
+            else:
+                parts.append(f"{e['login']} · ERR {e.get('err', '')[:40]}")
+        live_txt = "\n🌐 LIVE: " + " | ".join(parts)
     _notify(f"🤖 AUTO-TRADE · {act} {lots} lots @ {entry:,.2f}\n\n"
             f"🛑 SL {pos['sl']:,.2f}\n"
             f"🎯 TP1 {pos['tp1']:,.2f}\n"
             f"🎯 TP2 {pos['tp2']:,.2f}\n\n"
             f"💵 risk ${risk_amt:.2f} ({ae.get('riskPct', 1):g}%) · "
             f"{ae.get('mode', 'paper')} · equity "
-            f"${_ae_equity(ae):,.2f}", cat="signal")
+            f"${_ae_equity(ae):,.2f}{live_txt}", cat="signal")
 
 
 def _ae_close(tr):
@@ -918,6 +929,176 @@ def _ae_close(tr):
             f"{r:+.2f}R → {pnl:+.2f} $\n\n"
             f"💵 balance ${ae['balance']:,.2f} · today "
             f"{day.get('pnl', 0):+.2f} ${extra}", cat="signal")
+    _mt5_close_live(pos)     # also close the matching real-account tickets
+
+
+# ------------------------------------------------- live MT5 execution
+# People connect their own MT5 account in the web panel (login + server +
+# password — Exness fully supported) and the bot trades it for real.
+# A Render server cannot run the MT5 terminal itself, so accounts are
+# bridged through the MetaApi cloud (metaapi.cloud — free plan available),
+# which runs the terminal for us and exposes a REST API. Credentials are
+# encrypted at rest and only ever used to connect the owner's account.
+
+MTAAPI = "https://mt-client-api-v1.agiliumtrade.ai"
+EXNESS_SERVERS = ("Exness-Real", "Exness-Cent", "Exness-Trial")
+
+
+def _enc(s):
+    """Best-effort encryption at rest (XOR stream keyed by the bot)."""
+    import base64
+    if not s:
+        return ""
+    k = hashlib.sha256((TG_TOKEN or "xauusd").encode()).digest()
+    b = bytes(c ^ k[i % len(k)] for i, c in enumerate(s.encode()))
+    return base64.b64encode(b).decode()
+
+
+def _dec(s):
+    import base64
+    if not s:
+        return ""
+    try:
+        k = hashlib.sha256((TG_TOKEN or "xauusd").encode()).digest()
+        b = base64.b64decode(s)
+        return bytes(c ^ k[i % len(k)] for i, c in enumerate(b)).decode()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _mt5_req(method, path, token, body=None, timeout=25):
+    import urllib.request
+    req = urllib.request.Request(
+        MTAAPI + path,
+        data=json.dumps(body).encode() if body is not None else None,
+        headers={"API-Token": token, "Content-Type": "application/json",
+                 "User-Agent": "xauusd-ai-desk/1.0"}, method=method)
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        raw = r.read().decode()
+    return json.loads(raw) if raw else {}
+
+
+def _mt5_accounts():
+    return STATE.get("mt5") or []
+
+
+def _mt5_provision_thread(acc):
+    """Connect a newly submitted account: provision it on MetaApi, wait
+    for the cloud terminal to deploy, pull balance/equity, then mark it
+    live. Runs in the background so the web request never blocks."""
+    try:
+        j = _mt5_req("POST", "/users/current/accounts", _dec(acc["tokenEnc"]),
+                     dict(login=str(acc["login"]),
+                          password=_dec(acc["pwEnc"]),
+                          server=acc["server"], platform="mt5",
+                          broker=acc.get("broker") or "Exness"))
+        acc["accountId"] = j.get("accountId")
+        if not acc.get("accountId"):
+            raise RuntimeError("no accountId returned")
+        for _ in range(36):                       # up to ~3 minutes
+            time.sleep(5)
+            try:
+                c = _mt5_req("GET", f"/users/current/accounts/"
+                                    f"{acc['accountId']}/connection",
+                             _dec(acc["tokenEnc"]))
+            except Exception:  # noqa: BLE001
+                continue
+            if c.get("state") in ("DEPLOYED", "DEPLOYING"):
+                if c.get("state") == "DEPLOYED":
+                    break
+        else:
+            raise RuntimeError("terminal did not deploy in 3 min")
+        _mt5_sync_acc(acc)
+        acc["state"] = "connected"
+        acc["err"] = None
+    except Exception as e:  # noqa: BLE001
+        acc["state"] = "error"
+        acc["err"] = str(e)[:200]
+    with STATE_LOCK:
+        STATE["mt5"] = _mt5_accounts()
+        _save_state()
+    if acc["state"] == "connected":
+        _notify(f"🔗 MT5 CONNECTED · {acc.get('label') or acc['login']}\n\n"
+                f"🏦 {acc['server']}\n"
+                f"💵 balance {acc.get('currency', '')} "
+                f"{acc.get('balance', 0):,.2f}\n"
+                f"🤖 the bot now trades this account automatically at "
+                f"{acc.get('riskPct', 1):g}% risk", cat="signal")
+    else:
+        _notify(f"⚠ MT5 CONNECT FAILED · {acc.get('label') or acc['login']}\n"
+                f"{acc.get('err')}", cat="signal")
+
+
+def _mt5_sync_acc(acc):
+    info = _mt5_req("GET", f"/users/current/accounts/"
+                           f"{acc.get('accountId')}/accountInformation",
+                    _dec(acc["tokenEnc"]))
+    acc["balance"] = round(float(info.get("balance") or 0), 2)
+    acc["equity"] = round(float(info.get("equity") or 0), 2)
+    acc["currency"] = info.get("currency") or "USD"
+    acc["leverage"] = info.get("leverage")
+    return info
+
+
+def _mt5_lots(acc, stop_dist):
+    """Risk-sized lots for a live account. Cent accounts trade x100 the
+    base sizing (balance is reported in cents → /100 for true USD)."""
+    bal = float(acc.get("equity") or acc.get("balance") or 0)
+    if acc.get("cent"):
+        bal = bal / 100.0
+    if bal <= 0 or stop_dist <= 0:
+        return None
+    lots = bal * (acc.get("riskPct", 1.0) / 100.0) / (stop_dist * 100.0)
+    if acc.get("cent"):
+        lots *= 100.0
+    lots = max(0.01, round(lots, 2))
+    return min(lots, 5.0)
+
+
+def _mt5_exec_live(pos, stop_dist):
+    """Fire the same signal on every connected live account."""
+    out = []
+    for acc in _mt5_accounts():
+        if acc.get("state") != "connected":
+            continue
+        lots = _mt5_lots(acc, stop_dist)
+        if not lots:
+            continue
+        try:
+            j = _mt5_req(
+                "POST", f"/users/current/accounts/{acc['accountId']}/trade",
+                _dec(acc["tokenEnc"]),
+                dict(action="ORDER_TYPE_MARKET", symbol="XAUUSD",
+                     volume=lots, stopLoss=pos["sl"], takeProfit=pos["tp2"],
+                     comment="xauusd-ai"))
+            out.append(dict(accId=acc["id"], login=acc["login"],
+                            server=acc["server"], lots=lots,
+                            ticket=str(j)))
+        except Exception as e:  # noqa: BLE001
+            out.append(dict(accId=acc["id"], login=acc["login"],
+                            server=acc["server"], lots=lots,
+                            err=str(e)[:120]))
+    return out
+
+
+def _mt5_close_live(pos):
+    """Close the real-account tickets belonging to a settled position."""
+    for e in pos.get("live") or []:
+        if not e.get("ticket") or e.get("err"):
+            continue
+        acc = next((a for a in _mt5_accounts()
+                    if a.get("id") == e.get("accId")), None)
+        if not acc or not acc.get("accountId"):
+            continue
+        try:
+            _mt5_req("POST", f"/users/current/accounts/"
+                             f"{acc['accountId']}/trade",
+                     _dec(acc["tokenEnc"]),
+                     dict(action="POSITION_CLOSE", positionTicket=e["ticket"],
+                          symbol="XAUUSD", volume=e.get("lots")))
+            e["closed"] = True
+        except Exception as ex:  # noqa: BLE001
+            e["closeErr"] = str(ex)[:120]
 
 
 # ------------------------------------------------- every-signal tracker
@@ -2965,6 +3146,91 @@ def api_broker_sync_clear():
         STATE["brokerOffset"] = 0.0
         _save_state()
     return jsonify(offset=0.0)
+
+
+# ------------------------------------------------- MT5 live trading API
+@app.route("/api/mt5/accounts")
+def api_mt5_accounts():
+    ae = STATE.get("autoexec") or {}
+    return jsonify(
+        accounts=[dict(id=a.get("id"), label=a.get("label"),
+                       login=a.get("login"), server=a.get("server"),
+                       broker=a.get("broker"), state=a.get("state"),
+                       err=a.get("err"), balance=a.get("balance"),
+                       equity=a.get("equity"), currency=a.get("currency"),
+                       riskPct=a.get("riskPct"), cent=a.get("cent"))
+                  for a in _mt5_accounts()],
+        paper=dict(balance=ae.get("balance"),
+                   equity=_ae_equity(ae) if ae else None,
+                   open=len(ae.get("positions") or []),
+                   dayPnl=(ae.get("day") or {}).get("pnl"),
+                   totalTrades=ae.get("totalTrades"),
+                   totalPnl=ae.get("totalPnl")),
+        servers=list(EXNESS_SERVERS))
+
+
+@app.route("/api/mt5/connect", methods=["POST"])
+def api_mt5_connect():
+    j = request.get_json(force=True, silent=True) or {}
+    login = str(j.get("login") or "").strip()
+    pw = str(j.get("password") or "")
+    server = str(j.get("server") or "").strip()
+    token = str(j.get("token") or "").strip()
+    try:
+        risk = float(j.get("riskPct") or 1.0)
+    except (TypeError, ValueError):
+        risk = 1.0
+    cent = bool(j.get("cent"))
+    label = str(j.get("label") or "").strip()[:30]
+    if not (login.isdigit() and pw and server and token):
+        return jsonify(error="login (number), password, server and "
+                             "MetaApi token are all required"), 400
+    if any(str(a.get("login")) == login and a.get("server") == server
+           for a in _mt5_accounts()):
+        return jsonify(error="this account is already connected"), 409
+    acc = dict(id=_next_id(), login=login, server=server,
+               broker="Exness" if "exness" in server.lower() else "MT5",
+               label=label or None, pwEnc=_enc(pw), tokenEnc=_enc(token),
+               riskPct=min(max(risk, 0.1), 5.0), cent=cent,
+               state="connecting", err=None)
+    with STATE_LOCK:
+        STATE["mt5"] = _mt5_accounts() + [acc]
+        _save_state()
+    threading.Thread(target=_mt5_provision_thread, args=(acc,),
+                     daemon=True).start()
+    return jsonify(ok=True, id=acc["id"])
+
+
+@app.route("/api/mt5/sync", methods=["POST"])
+def api_mt5_sync():
+    for acc in _mt5_accounts():
+        if acc.get("state") == "connected" and acc.get("accountId"):
+            try:
+                _mt5_sync_acc(acc)
+                acc["err"] = None
+            except Exception as e:  # noqa: BLE001
+                acc["err"] = str(e)[:120]
+    with STATE_LOCK:
+        STATE["mt5"] = _mt5_accounts()
+        _save_state()
+    return jsonify(ok=True)
+
+
+@app.route("/api/mt5/accounts/<int:aid>", methods=["DELETE"])
+def api_mt5_delete(aid):
+    acc = next((a for a in _mt5_accounts() if a.get("id") == aid), None)
+    if not acc:
+        return jsonify(error="not found"), 404
+    if acc.get("accountId"):
+        try:
+            _mt5_req("DELETE", f"/users/current/accounts/{acc['accountId']}",
+                     _dec(acc["tokenEnc"]))
+        except Exception:  # noqa: BLE001
+            pass
+    with STATE_LOCK:
+        STATE["mt5"] = [a for a in _mt5_accounts() if a.get("id") != aid]
+        _save_state()
+    return jsonify(ok=True)
 
 
 STATIC_DIR = os.path.join(BASE, "static")

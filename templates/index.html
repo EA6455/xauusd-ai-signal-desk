@@ -258,6 +258,23 @@
   .pa-x{border:none; background:transparent; color:var(--muted); padding:2px 6px; font-size:13px}
   .pa-x:hover{color:var(--red)}
 
+  /* MT5 live auto-trade panel */
+  .mt5-form{display:flex; flex-direction:column; gap:8px}
+  .mt5-row{display:flex; gap:8px; flex-wrap:wrap}
+  .mt5-row input{flex:1 1 150px; min-width:0; background:var(--card2); border:1px solid var(--border);
+    color:var(--text); border-radius:8px; padding:7px 9px; font-size:13px; outline:none}
+  .mt5-row input:focus{border-color:var(--gold)}
+  .mt5-btn{background:linear-gradient(180deg,#1d2740,#182034); border:1px solid #2a3752; color:var(--gold);
+    border-radius:9px; padding:8px 14px; font-size:12.5px; font-weight:700; flex:none}
+  .mt5-btn:hover{border-color:var(--gold); transform:none}
+  .mt5-acc{display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:8px 2px;
+    border-top:1px dashed rgba(148,163,184,.14); font-size:12.5px}
+  .mt5-dot{width:9px; height:9px; border-radius:3px; flex:none; background:var(--amber)}
+  .mt5-dot.ok{background:var(--green)} .mt5-dot.err{background:var(--red)}
+  .mt5-x{border:1px solid var(--border); background:transparent; color:var(--muted);
+    border-radius:7px; padding:3px 9px; font-size:11.5px}
+  .mt5-x:hover{color:var(--red); border-color:var(--red)}
+
   .fn-macro{display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:6px}
   .fn-chip{background:var(--card2); border:1px solid var(--border); border-radius:8px;
     padding:5px 10px; font-size:12.5px; white-space:nowrap}
@@ -453,6 +470,44 @@
       <div class="card">
         <div class="card-head"><h2>Signal Tracker</h2><span class="muted small" id="trkStats"></span></div>
         <div id="trkBody"><div class="muted small">no live signal — waiting for an A+ setup</div></div>
+      </div>
+
+      <div class="card" id="mt5Card">
+        <div class="card-head"><h2>🤖 Live Auto-Trade · MT5</h2>
+          <span class="muted small" id="mt5Sum">paper engine armed</span></div>
+        <div id="mt5Paper" class="small muted" style="margin-bottom:10px"></div>
+        <div class="mt5-form">
+          <div class="mt5-row">
+            <input id="mt5Login" placeholder="MT5 login (e.g. 12345678)" inputmode="numeric" autocomplete="off">
+            <input id="mt5Pw" type="password" placeholder="MT5 password" autocomplete="new-password">
+          </div>
+          <div class="mt5-row">
+            <input id="mt5Server" list="mt5Servers" placeholder="Server (e.g. Exness-Cent)" autocomplete="off">
+            <datalist id="mt5Servers">
+              <option value="Exness-Real"></option>
+              <option value="Exness-Cent"></option>
+              <option value="Exness-Trial"></option>
+            </datalist>
+            <input id="mt5Token" type="password" placeholder="MetaApi API token" autocomplete="new-password">
+          </div>
+          <div class="mt5-row" style="align-items:center">
+            <label class="small" style="display:flex; align-items:center; gap:6px; flex:none">
+              <input type="checkbox" id="mt5Cent" checked> cent account</label>
+            <input id="mt5Risk" type="number" min="0.1" max="5" step="0.1" value="1" style="width:74px" title="risk % per trade">
+            <span class="small muted" style="flex:none">% risk</span>
+            <button id="mt5Connect" class="mt5-btn">Connect &amp; let it trade</button>
+          </div>
+        </div>
+        <div id="mt5List" style="margin-top:12px"></div>
+        <div class="small muted" style="margin-top:10px; line-height:1.5">
+          Paste your Exness MT5 login, server and password — the bot trades this
+          account by itself with the signals you see on this page.
+          Get a free API token at
+          <a href="https://metaapi.cloud" target="_blank" rel="noopener">metaapi.cloud</a>
+          (sign up → API tokens → create). Your password is stored encrypted and
+          used only to connect <b>your own</b> account. Standard MT5 brokers work
+          too — just type the exact server name from your MT5 app.
+        </div>
       </div>
 
       <div class="card">
@@ -2227,6 +2282,75 @@ const INITIAL = {{ payload|tojson }};
   document.addEventListener('visibilitychange', () => {
     if(!document.hidden){ load(false); loadEntry(); }
   });
+
+  // ---------- MT5 live auto-trade ----------
+  async function mt5Load(){
+    try{
+      const r = await apiFetch('/api/mt5/accounts');
+      const j = await r.json();
+      const p = j.paper || {};
+      $('mt5Paper').innerHTML = '🧪 paper engine: equity <b class="mono">$'
+        + (p.equity != null ? p.equity.toFixed(2) : '—') + '</b> · today '
+        + (p.dayPnl != null ? (p.dayPnl >= 0 ? '+' : '') + p.dayPnl.toFixed(2) : '—')
+        + '$ · all-time ' + (p.totalTrades || 0) + ' trades · '
+        + (p.totalPnl != null ? (p.totalPnl >= 0 ? '+' : '') + p.totalPnl.toFixed(2) : '—') + '$';
+      const accs = j.accounts || [];
+      $('mt5Sum').textContent = accs.length
+        ? accs.filter(a => a.state === 'connected').length + '/' + accs.length + ' live accounts'
+        : 'paper engine armed';
+      $('mt5List').innerHTML = accs.length ? accs.map(a => {
+        const dot = a.state === 'connected' ? 'ok' : (a.state === 'error' ? 'err' : '');
+        const bal = a.balance != null
+          ? (a.currency || '') + ' ' + a.balance.toLocaleString(undefined,
+              {minimumFractionDigits: 2}) : '';
+        return '<div class="mt5-acc"><span class="mt5-dot ' + dot + '"></span>'
+          + '<b>' + (a.label || a.login) + '</b>'
+          + '<span class="muted">' + a.login + ' @ ' + a.server + '</span>'
+          + (bal ? '<span class="mono">' + bal + '</span>' : '')
+          + '<span class="muted">' + (a.riskPct || 1) + '% risk'
+          + (a.cent ? ' · cent' : '') + '</span>'
+          + (a.state === 'connecting' ? '<span class="muted">connecting…</span>' : '')
+          + (a.err ? '<span style="color:var(--red)">⚠ ' + a.err.slice(0, 60) + '</span>' : '')
+          + '<button class="mt5-x" onclick="mt5Del(' + a.id + ')">disconnect</button></div>';
+      }).join('') : '<div class="muted small">no live accounts yet — the paper engine is trading above while you connect one</div>';
+    }catch(e){}
+  }
+  async function mt5Del(id){
+    if(!confirm('Disconnect this MT5 account? The bot stops trading it.')) return;
+    try{
+      await apiFetch('/api/mt5/accounts/' + id, {method: 'DELETE'});
+      toast('Account disconnected');
+      mt5Load();
+    }catch(e){ toast('⚠ Could not disconnect'); }
+  }
+  window.mt5Del = mt5Del;   // inline onclick lives in global scope
+  $('mt5Connect').addEventListener('click', async () => {
+    const login = $('mt5Login').value.trim();
+    const pw = $('mt5Pw').value;
+    const server = $('mt5Server').value.trim();
+    const token = $('mt5Token').value.trim();
+    if(!(login && pw && server && token)){
+      toast('Fill login, password, server and MetaApi token'); return;
+    }
+    $('mt5Connect').textContent = 'Connecting…';
+    try{
+      const r = await apiFetch('/api/mt5/connect', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({login, password: pw, server, token,
+          riskPct: parseFloat($('mt5Risk').value) || 1,
+          cent: $('mt5Cent').checked})
+      });
+      const j = await r.json();
+      if(j.error){ toast('⚠ ' + j.error); return; }
+      $('mt5Pw').value = ''; $('mt5Token').value = '';
+      toast('🔗 Connecting your account — takes up to a minute the first time');
+      mt5Load();
+      setTimeout(mt5Load, 8000); setTimeout(mt5Load, 25000); setTimeout(mt5Load, 60000);
+    }catch(e){ toast('⚠ Connect failed'); }
+    finally{ $('mt5Connect').textContent = 'Connect & let it trade'; }
+  });
+  setInterval(mt5Load, 20000);
+  mt5Load();
 
   // ---------- broker sync ----------
   function showSyncState(off){

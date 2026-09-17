@@ -667,9 +667,27 @@ def maybe_setup_alert(ent, elite_stats=None):
     grade = ent.get("grade")
     if grade not in ("A+", "B+", "C+"):
         return
+    # self-upgrade knobs: the research engine promotes challengers by
+    # switching this gate/exit automatically (see _maybe_upgrade)
+    upg = ((STATE.get("research") or {}).get("upgrade") or {})
+    gate = upg.get("gate") or "delta"
+    exitr = upg.get("exit") or [1.0, 2.0]
     elite = bool(ent.get("contZone")) and grade in ("A+", "B+")
     base = elite or grade == "A+"
-    phone = base and bool(ent.get("deltaOK"))
+    if gate == "cont-only":
+        base = elite
+    phone = base and (gate != "delta" or bool(ent.get("deltaOK")))
+    if gate == "session":
+        phone = phone and ent.get("session") in ("london", "ny-overlap",
+                                                 "ny-late")
+    if gate == "none" and grade == "C+":
+        phone = False          # no-delta-gate variant never trades C+ zones
+    if exitr != [1.0, 2.0]:
+        # promoted exit profile — recompute TPs as pure R multiples
+        _d = 1 if ent["direction"] == "LONG" else -1
+        _risk = abs(float(ent["entry"]) - float(ent["sl"]))
+        ent["tp1"] = round(float(ent["entry"]) + _d * exitr[0] * _risk, 2)
+        ent["tp2"] = round(float(ent["entry"]) + _d * exitr[1] * _risk, 2)
     if phone and not _stop_cap_ok(ent["entry"], ent["sl"]):
         phone = False
         cap_skip = True
@@ -729,7 +747,7 @@ def maybe_setup_alert(ent, elite_stats=None):
         f"🎯 Entry: {ent['entry']:,.2f}\n"
         f"🛑 SL: {ent['sl']:,.2f}\n"
         f"🎯 TP1: {ent['tp1']:,.2f}\n"
-        f"🎯 TP2: {ent['tp2']:,.2f} (2R)")
+        f"🎯 TP2: {ent['tp2']:,.2f} ({exitr[1]:g}R)")
     track_signal(grade, key, ent["direction"], ent["entry"], ent["sl"],
                  ent["tp1"], ent["tp2"])
 
@@ -1819,7 +1837,25 @@ def _research_digest(r, res):
     else:
         lines += ["", "🔬 candidates: none yet "
                   "(needs OOS n≥3 and +0.15R edge)"]
+    upg = _upgrade_state(r)
+    lines += ["",
+              f"⚙ live config: {upg.get('gate', 'delta')}-gate · exit "
+              f"{upg['exit'][0]:g}:{upg['exit'][1]:g}"]
+    if upg.get("pending"):
+        lines.append(f"⏳ pending upgrade: {upg['pending']['name']} "
+                     f"({upg['pending'].get('streak', 1)}/{UPGRADE_STREAK} "
+                     "checks confirmed)")
+    for h in reversed((upg.get("history") or [])[-3:]):
+        when = time.strftime("%d %b %H:%M", time.gmtime(h["ts"]))
+        if h.get("name") == "rollback":
+            lines.append(f"↩ {when} rollback → gate {h['gate']} · exit "
+                         f"{h['exit'][0]:g}:{h['exit'][1]:g} "
+                         f"(live {h.get('liveAvgR', 0):+.2f}R)")
+        else:
+            lines.append(f"⬆ {when} upgrade: {h['name']} → gate "
+                         f"{h['gate']} · exit {h['exit'][0]:g}:{h['exit'][1]:g}")
     _notify("\n".join(lines), cat="develop")
+    _maybe_upgrade(r, res)          # research findings update the system
 
 
 def _research_status():
@@ -1866,6 +1902,13 @@ def _research_status():
         lines.append(f"🔬 OOS {round((oos.get('win') or 0) * 100)}% "
                      f"· {oos.get('avgR', 0):+.2f}R · n={oos['n']}")
     lines.append(f"🧪 candidates beating production: {cands}")
+    upg = r.get("upgrade") or {}
+    cfg = f"⚙ live config: {upg.get('gate', 'delta')}-gate · exit " \
+          f"{(upg.get('exit') or [1, 2])[0]}:{(upg.get('exit') or [1, 2])[1]}"
+    if upg.get("pending"):
+        cfg += f" · ⏳ {upg['pending']['name']} " \
+               f"({upg['pending'].get('streak', 1)}/{UPGRADE_STREAK})"
+    lines.append(cfg)
     ld = r.get("lastDigestT")
     if ld:
         nxt = max(0, (RESEARCH_DIGEST_S - int(now - ld)) // 60)
@@ -2072,6 +2115,147 @@ def _llm_researcher():
         STATE["research"] = r
         _save_state()
     return True
+
+
+# ------------------------------------------------- self-upgrade engine
+# Research findings now UPDATE the live system by themselves: when a
+# challenger variant beats production out-of-sample (n>=5, +0.20R edge)
+# for 3 consecutive hourly checks, it is PROMOTED — the live signal gate
+# and exit profile switch automatically and an upgrade card posts to the
+# DEVELOP topic. Live results are then watched: if the promoted config
+# underperforms the old baseline (n>=8 live trades, avgR below baseline
+# -0.10R), it rolls back automatically. Max one promotion per 24h.
+
+UPGRADE_EDGE_R = 0.20
+UPGRADE_STREAK = 3
+UPGRADE_COOLDOWN_S = 86400
+ROLLBACK_MIN_N = 8
+ROLLBACK_EDGE_R = 0.10
+
+_KNOBS = {   # research variant -> (gate, exit) live knobs it changes
+    "no-delta-gate":           ("none", None),
+    "continuation-only+delta": ("cont-only", None),
+    "live-session+delta":      ("session", None),
+    "exit 1:2.5":              (None, (1.0, 2.5)),
+    "exit 0.75:1.5":           (None, (0.75, 1.5)),
+}
+
+
+def _upgrade_state(r):
+    up = r.get("upgrade")
+    if not up:
+        up = dict(gate="delta", exit=[1.0, 2.0], history=[],
+                  pending=None, prev=None, lastPromoteT=0)
+        r["upgrade"] = up
+    return up
+
+
+def _maybe_upgrade(r, res):
+    """Promote a challenger that has beaten production out-of-sample for
+    UPGRADE_STREAK consecutive hourly checks. Called from the digest."""
+    up = _upgrade_state(r)
+    po = (res.get("production") or {}).get("oos") or {}
+    if (po.get("n") or 0) >= 3 and po.get("avgR") is not None:
+        best = None
+        for v in res.get("variants") or []:
+            vo = v.get("oos") or {}
+            if (vo.get("n") or 0) >= 5 and vo.get("avgR") is not None \
+                    and vo["avgR"] > po["avgR"] + UPGRADE_EDGE_R:
+                if best is None or vo["avgR"] > best[1]["oos"]["avgR"]:
+                    best = (v["name"], v)
+        if best:
+            p = up.get("pending") or {}
+            if p.get("name") == best[0]:
+                p["streak"] = (p.get("streak") or 0) + 1
+            else:
+                p = dict(name=best[0], streak=1)
+            p["oos"] = dict(best[1]["oos"])
+            p["prodOos"] = dict(po)
+            up["pending"] = p
+            if p["streak"] >= UPGRADE_STREAK and time.time() - \
+                    up.get("lastPromoteT", 0) >= UPGRADE_COOLDOWN_S:
+                _apply_upgrade(r, up, p)
+                return
+        else:
+            up["pending"] = None
+    _maybe_rollback(r)
+
+
+def _apply_upgrade(r, up, p):
+    name = p["name"]
+    gate, exitr = _KNOBS.get(name, (None, None))
+    prev = dict(gate=up.get("gate") or "delta",
+                exit=list(up.get("exit") or [1.0, 2.0]))
+    if gate:
+        up["gate"] = gate
+    if exitr:
+        up["exit"] = list(exitr)
+    up["prev"] = prev
+    up["pending"] = None
+    up["lastPromoteT"] = int(time.time())
+    o, q = p["oos"], p["prodOos"]
+    up["history"] = (up.get("history") or [])[-9:] + [dict(
+        ts=up["lastPromoteT"], name=name, gate=up["gate"],
+        exit=list(up["exit"]), oos=dict(o), prodOos=dict(q))]
+    with STATE_LOCK:
+        STATE["research"] = r
+        _save_state()
+    _notify(
+        "⬆️ SYSTEM UPGRADE · auto-applied\n\n"
+        f"🔬 research proved: {name}\n"
+        f"   OOS {o['n']} trades · {round((o['win'] or 0) * 100)}% · "
+        f"{o['avgR']:+.2f}R\n"
+        f"   vs production OOS {q['n']} · {round((q['win'] or 0) * 100)}% · "
+        f"{q['avgR']:+.2f}R\n\n"
+        f"⚙ live config: gate {prev['gate']} → {up['gate']} · exit "
+        f"{prev['exit'][0]:g}:{prev['exit'][1]:g} → "
+        f"{up['exit'][0]:g}:{up['exit'][1]:g}\n"
+        f"🛡 live watch: auto-rollback if live avgR < "
+        f"{q['avgR'] - ROLLBACK_EDGE_R:+.2f}R over {ROLLBACK_MIN_N} trades",
+        cat="develop")
+
+
+def _maybe_rollback(r):
+    """Watch live results of a promoted config; revert if it disappoints."""
+    up = r.get("upgrade") or {}
+    prev = up.get("prev")
+    if not prev or not up.get("lastPromoteT"):
+        return
+    prom_t = up["lastPromoteT"]
+    rs = [t["r"] for t in (STATE.get("tradeHistory") or [])
+          if (t.get("openedAt") or 0) > prom_t
+          and t.get("src") in ("A+", "B+") and t.get("status") == "closed"
+          and isinstance(t.get("r"), (int, float))]
+    if len(rs) < ROLLBACK_MIN_N:
+        return
+    avg = sum(rs) / len(rs)
+    base = None
+    for h in reversed(up.get("history") or []):
+        if h.get("name") != "rollback":
+            base = (h.get("prodOos") or {}).get("avgR")
+        break
+    if base is None:
+        return
+    if avg < base - ROLLBACK_EDGE_R:
+        gate = prev.get("gate") or "delta"
+        exit_p = prev.get("exit") or [1.0, 2.0]
+        up["gate"] = gate
+        up["exit"] = list(exit_p)
+        up["prev"] = None
+        up["history"] = (up.get("history") or [])[-9:] + [dict(
+            ts=int(time.time()), name="rollback", gate=gate,
+            exit=list(exit_p), liveAvgR=round(avg, 2), baseR=base)]
+        with STATE_LOCK:
+            STATE["research"] = r
+            _save_state()
+        _notify(
+            "⬇️ AUTO-ROLLBACK · upgrade withdrawn\n\n"
+            f"📉 live results since upgrade: {len(rs)} trades · "
+            f"{avg:+.2f}R avg (baseline {base:+.2f}R)\n"
+            f"⚙ config restored: gate {gate} · exit "
+            f"{exit_p[0]:g}:{exit_p[1]:g}\n"
+            "🔬 research continues — a challenger must re-qualify "
+            "out-of-sample to return", cat="develop")
 
 
 def research_cycle(force=False):
@@ -2605,7 +2789,16 @@ def health():
                                      (r.get("intel") or {}).get("headlines") or []),
                                  lastIntelT=r.get("lastIntelT"),
                                  llm=(r.get("llm") or {}).get("state"),
-                                 llmErr=(r.get("llm") or {}).get("err")))
+                                 llmErr=(r.get("llm") or {}).get("err"),
+                                 upgrade=dict(
+                                     gate=(r.get("upgrade") or {}).get(
+                                         "gate", "delta"),
+                                     exitR=(r.get("upgrade") or {}).get(
+                                         "exit", [1.0, 2.0]),
+                                     pending=((r.get("upgrade") or {})
+                                              .get("pending") or {}).get("name"),
+                                     lastPromoteT=(r.get("upgrade") or {})
+                                     .get("lastPromoteT"))))
 
 
 # Start the realtime feed + background loop at import time so WSGI servers

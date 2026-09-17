@@ -757,6 +757,167 @@ def _close_trade(tr, result, r, price):
               closedAt=int(time.time()), closePrice=round(float(price), 2))
     STATE["tradeHistory"].insert(0, dict(tr))
     del STATE["tradeHistory"][25:]
+    _ae_close(tr)        # settle the matching autonomous position, if any
+
+
+# ------------------------------------------------- autonomous trading
+# The system TRADES by itself: every fired signal card is executed
+# automatically on the engine account — paper mode now (real live prices,
+# exact 1% risk sizing, zero money at risk); a live cent-account MT5
+# adapter plugs into the same engine when broker access is connected.
+# Hard guards: max 1 open position, max 5 trades/day, daily loss pause.
+
+AE_SOURCES = ("A+", "B+", "MOMENTUM", "SWEEP")   # rotation stays web-only
+
+
+def _ae():
+    ae = STATE.get("autoexec")
+    if not ae:
+        ae = dict(enabled=True, mode="paper", riskPct=1.0,
+                  startBalance=100.0, balance=100.0,
+                  positions=[], closed=[],
+                  day=dict(d="", trades=0, pnl=0.0, paused=False),
+                  guards=dict(maxDailyLossPct=3.0, maxTradesPerDay=5,
+                              maxOpen=1),
+                  totalTrades=0, totalPnl=0.0)
+        with STATE_LOCK:
+            STATE["autoexec"] = ae
+            _save_state()
+    return ae
+
+
+def _ae_equity(ae, px=None):
+    """Balance + unrealized P&L of open autonomous positions."""
+    eq = ae.get("balance", 0.0)
+    if ae.get("positions"):
+        if px is None:
+            try:
+                px, _s = tick_spot(broker=False)
+            except Exception:  # noqa: BLE001
+                px = None
+        if px:
+            for p in ae["positions"]:
+                d = 1 if p.get("dir") == "LONG" else -1
+                eq += d * (px - p["entry"]) * p.get("lots", 0) * 100.0
+    return round(eq, 2)
+
+
+def _ae_rollover(ae):
+    """Reset daily counters at UTC midnight + post the day's summary."""
+    today = time.strftime("%Y-%m-%d", time.gmtime())
+    day = ae.get("day") or {}
+    if day.get("d") == today:
+        return
+    if day.get("d"):
+        prev = [c for c in (ae.get("closed") or [])
+                if time.strftime("%Y-%m-%d",
+                                 time.gmtime(c.get("closedAt", 0)))
+                == day["d"]]
+        if prev:
+            wins = sum(1 for c in prev if (c.get("pnl") or 0) > 0)
+            pnl = round(sum(c.get("pnl") or 0 for c in prev), 2)
+            _notify(f"🤖 AUTO-TRADE daily summary · {day['d']}\n\n"
+                    f"trades {len(prev)} · wins {wins} "
+                    f"({100 * wins // len(prev)}%)\n"
+                    f"day P&L {pnl:+.2f} $\n"
+                    f"💵 balance ${ae.get('balance', 0):,.2f}\n"
+                    f"all-time {ae.get('totalPnl', 0):+.2f} $ over "
+                    f"{ae.get('totalTrades', 0)} trades", cat="develop")
+    ae["day"] = dict(d=today, trades=0, pnl=0.0, paused=False)
+
+
+def _ae_open(src, key, direction, entry, sl, tp1, tp2):
+    """Autonomously execute a fired signal: open a position sized to
+    riskPct of the account balance. Paper mode fills fractional lots at
+    the signal price; live cent mode scales x100 with a 0.01 lot minimum."""
+    ae = _ae()
+    if not ae.get("enabled") or src not in AE_SOURCES:
+        return
+    _ae_rollover(ae)
+    day = ae["day"]
+    g = ae.get("guards") or {}
+    if day.get("pnl", 0) <= -abs(g.get("maxDailyLossPct", 3.0)) / 100.0 \
+            * ae.get("startBalance", 100.0):
+        day["paused"] = True          # self-healing loss brake
+    if day.get("paused") or day.get("trades", 0) >= g.get(
+            "maxTradesPerDay", 5):
+        return
+    if len(ae.get("positions") or []) >= g.get("maxOpen", 1):
+        return
+    if any(p.get("key") == key for p in ae.get("positions") or []):
+        return
+    try:
+        entry = float(entry)
+        stop = abs(entry - float(sl))
+    except (TypeError, ValueError):
+        return
+    if stop <= 0:
+        return
+    risk_amt = round(ae["balance"] * ae.get("riskPct", 1.0) / 100.0, 2)
+    lots = risk_amt / (stop * 100.0)          # XAUUSD: 1 lot = 100 oz
+    if ae.get("mode") == "live":
+        lots = max(0.01, round(lots * 100, 2))   # cent account: x100
+    else:
+        lots = round(lots, 4)                    # paper: fractional ok
+    pos = dict(id=_next_id(), key=key, src=src, dir=direction,
+               entry=round(entry, 2), sl=round(float(sl), 2),
+               tp1=round(float(tp1), 2), tp2=round(float(tp2), 2),
+               lots=lots, riskAmt=risk_amt, openedAt=int(time.time()))
+    ae.setdefault("positions", []).append(pos)
+    day["trades"] += 1
+    ae["totalTrades"] = ae.get("totalTrades", 0) + 1
+    with STATE_LOCK:
+        STATE["autoexec"] = ae
+        _save_state()
+    ic = "🟢" if direction == "LONG" else "🔴"
+    act = "BUY" if direction == "LONG" else "SELL"
+    _notify(f"🤖 AUTO-TRADE · {act} {lots} lots @ {entry:,.2f}\n\n"
+            f"🛑 SL {pos['sl']:,.2f}\n"
+            f"🎯 TP1 {pos['tp1']:,.2f}\n"
+            f"🎯 TP2 {pos['tp2']:,.2f}\n\n"
+            f"💵 risk ${risk_amt:.2f} ({ae.get('riskPct', 1):g}%) · "
+            f"{ae.get('mode', 'paper')} · equity "
+            f"${_ae_equity(ae):,.2f}", cat="signal")
+
+
+def _ae_close(tr):
+    """Settle the autonomous position matching a closed tracked signal."""
+    ae = STATE.get("autoexec")
+    if not ae or not ae.get("enabled"):
+        return
+    key, src = tr.get("key"), tr.get("src")
+    pos = None
+    for p in ae.get("positions") or []:
+        if p.get("key") == key and p.get("src") == src:
+            pos = p
+            break
+    if not pos:
+        return
+    ae["positions"] = [p for p in ae["positions"] if p is not pos]
+    r = tr.get("r") if isinstance(tr.get("r"), (int, float)) else 0.0
+    pnl = round(r * pos.get("riskAmt", 0.0), 2)
+    ae["balance"] = round(ae.get("balance", 0.0) + pnl, 2)
+    ae["totalPnl"] = round(ae.get("totalPnl", 0.0) + pnl, 2)
+    day = ae.get("day") or {}
+    day["pnl"] = round(day.get("pnl", 0.0) + pnl, 2)
+    ae["closed"] = (ae.get("closed") or [])[-49:] + [dict(
+        pos, closedAt=int(time.time()), r=round(r, 2), pnl=pnl,
+        result=tr.get("result"), balance=ae["balance"])]
+    g = ae.get("guards") or {}
+    if day.get("pnl", 0) <= -abs(g.get("maxDailyLossPct", 3.0)) / 100.0 \
+            * ae.get("startBalance", 100.0):
+        day["paused"] = True
+    with STATE_LOCK:
+        STATE["autoexec"] = ae
+        _save_state()
+    ic = "✅" if pnl >= 0 else "❌"
+    extra = ("\n🛑 daily loss limit hit — auto-trading paused until "
+             "tomorrow" if day.get("paused") else "")
+    _notify(f"🤖 AUTO-TRADE CLOSED {ic}\n\n"
+            f"{pos.get('src')} {pos.get('dir')} {pos.get('lots')} lots · "
+            f"{r:+.2f}R → {pnl:+.2f} $\n\n"
+            f"💵 balance ${ae['balance']:,.2f} · today "
+            f"{day.get('pnl', 0):+.2f} ${extra}", cat="signal")
 
 
 # ------------------------------------------------- every-signal tracker
@@ -784,6 +945,7 @@ def track_signal(src, key, direction, entry, sl, tp1, tp2):
                          result=None, r=0.0))
         STATE["signalTrades"] = sigs[-20:]
         _save_state()
+    _ae_open(src, key, direction, entry, sl, tp1, tp2)   # autonomous exec
 
 
 def update_signal_trades():
@@ -1930,6 +2092,15 @@ def _research_status():
         lines.append("🧠 LLM researcher: provider error — retrying hourly")
     else:
         lines.append("🧠 LLM researcher: add OPENAI_API_KEY to activate")
+    ae = STATE.get("autoexec")
+    if ae.get("enabled"):
+        eq = _ae_equity(ae, px)
+        st = ae.get("startBalance") or 100.0
+        lines.append(f"🤖 auto-trade · {ae.get('mode', 'paper').upper()} · "
+                     f"equity ${eq:,.2f} ({(eq / st - 1) * 100:+.1f}%) · "
+                     f"today {(ae.get('day') or {}).get('pnl', 0):+.2f}$"
+                     + (" · PAUSED" if (ae.get("day") or {}).get("paused")
+                        else ""))
     lines.append(f"🌂 {time.strftime('%H:%M:%S', time.gmtime(now))}"
                  " UTC · this status updates live every 30s")
     txt = "\n".join(lines)
@@ -2844,7 +3015,27 @@ def health():
                                      pending=((r.get("upgrade") or {})
                                               .get("pending") or {}).get("name"),
                                      lastPromoteT=(r.get("upgrade") or {})
-                                     .get("lastPromoteT"))))
+                                     .get("lastPromoteT")),
+                                 autoexec=dict(
+                                     enabled=(STATE.get("autoexec")
+                                              or {}).get("enabled", False),
+                                     mode=(STATE.get("autoexec")
+                                           or {}).get("mode", "paper"),
+                                     balance=(STATE.get("autoexec")
+                                              or {}).get("balance"),
+                                     open=len(((STATE.get("autoexec")
+                                                or {}).get("positions")
+                                               or [])),
+                                     dayTrades=((STATE.get("autoexec")
+                                                 or {}).get("day")
+                                                or {}).get("trades"),
+                                     dayPnl=((STATE.get("autoexec")
+                                              or {}).get("day") or {})
+                                     .get("pnl"),
+                                     totalTrades=(STATE.get("autoexec")
+                                                  or {}).get("totalTrades"),
+                                     totalPnl=(STATE.get("autoexec")
+                                               or {}).get("totalPnl"))))
 
 
 # Start the realtime feed + background loop at import time so WSGI servers

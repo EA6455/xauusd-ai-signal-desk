@@ -3278,7 +3278,8 @@ def _mtf_scan():
     def better(cand):
         return best is None or cand["score"] > best["score"]
     if ent and not ent.get("touching") and not ent.get("active") \
-            and (ent.get("passed") or 0) >= 6 and not ent.get("grade") \
+            and (ent.get("passed") or 0) >= 6 \
+            and ent.get("grade") in (None, "", "\u2014") \
             and ent.get("entry") is not None:
         cand = dict(kind="arming", tf="15m",
                     side=("demand" if ent.get("direction") == "LONG"

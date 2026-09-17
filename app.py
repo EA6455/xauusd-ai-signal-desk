@@ -1882,6 +1882,8 @@ def _research_status():
     if llmst == "active":
         lines.append(f"🧠 LLM researcher: "
                      f"{(r.get('llm') or {}).get('model', 'AI')} · active")
+    elif llmst == "error":
+        lines.append("🧠 LLM researcher: provider error — retrying hourly")
     else:
         lines.append("🧠 LLM researcher: add OPENAI_API_KEY to activate")
     lines.append(f"🌂 {time.strftime('%H:%M:%S', time.gmtime(now))}"
@@ -2029,12 +2031,21 @@ def _llm_researcher():
                "lines: MATTER: what matters most for the strategy now; "
                "IDEA: one concrete backtest idea to test next; RISK: one "
                "risk to watch. No markdown, no JSON.")
+    txt, err = None, None
     try:
-        txt = llm_desk._CALLS[k](key, model, "\n".join(brief), sys_txt)
-    except TypeError:  # older provider signature without sys prompt
-        txt = llm_desk._CALLS[k](key, model, "\n".join(brief))
+        try:
+            txt = llm_desk._CALLS[k](key, model, "\n".join(brief), sys_txt)
+        except TypeError:  # older provider signature without sys prompt
+            txt = llm_desk._CALLS[k](key, model, "\n".join(brief))
+    except Exception as e:  # noqa: BLE001  bad key / no credits / network
+        err = str(e)[:200]
     txt = (txt or "").strip()[:900]
     if not txt:
+        r["llm"] = dict(state="error", provider=k, model=model,
+                        lastT=now, err=err or "empty reply")
+        with STATE_LOCK:
+            STATE["research"] = r
+            _save_state()
         return False
     _notify(f"\U0001F9E0 LLM RESEARCHER \u00b7 {p['name']}\n\n{txt}",
             cat="develop")
@@ -2575,7 +2586,8 @@ def health():
                                  intelHeadlines=len(
                                      (r.get("intel") or {}).get("headlines") or []),
                                  lastIntelT=r.get("lastIntelT"),
-                                 llm=(r.get("llm") or {}).get("state")))
+                                 llm=(r.get("llm") or {}).get("state"),
+                                 llmErr=(r.get("llm") or {}).get("err")))
 
 
 # Start the realtime feed + background loop at import time so WSGI servers

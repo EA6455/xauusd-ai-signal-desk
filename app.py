@@ -3007,6 +3007,32 @@ def cloud_load():
         return False
 
 
+def _cloud_untombstone(key):
+    """A fresh Connect overrides an old disconnect tombstone — remove it
+    from the shared cloud state too, or the merge in cloud_save would
+    keep dropping this account forever."""
+    try:
+        import base64
+        cur = _cloud_req("GET", f"/repos/{STATE_REPO}/contents/"
+                                f"state.json")
+        if not cur or cur.get("content") is None:
+            return
+        blob = json.loads(base64.b64decode(cur["content"]))
+        dead = list(blob.get("mt5_deleted") or [])
+        if key not in dead:
+            return                          # nothing to clear
+        blob["mt5_deleted"] = [d for d in dead if d != key]
+        j = _cloud_req("PUT", f"/repos/{STATE_REPO}/contents/state.json",
+                       dict(message=f"untombstone {key}",
+                            content=base64.b64encode(
+                                json.dumps(blob).encode()).decode(),
+                            sha=cur.get("sha")))
+        _cloud_mem["sha"] = ((j.get("content") or {}).get("sha")
+                             or _cloud_mem.get("sha"))
+    except Exception:  # noqa: BLE001  — best effort; local clear already ran
+        pass
+
+
 def cloud_save(force=False):
     """Persist MT5 accounts + engine stats to the private repo so they
     survive the next deploy. Debounced; call with force=True on real
@@ -3580,9 +3606,33 @@ def api_mt5_connect():
     if not token:
         return jsonify(error="trading bridge not configured yet — the "
                              "owner must set METAAPI_TOKEN once"), 503
-    if any(str(a.get("login")) == login and a.get("server") == server
-           for a in _mt5_accounts()):
+    key = f"{login}|{server}"
+    existing = next((a for a in _mt5_accounts()
+                     if str(a.get("login")) == login
+                     and a.get("server") == server), None)
+    if existing and existing.get("state") == "connected":
         return jsonify(error="this account is already connected"), 409
+    if existing:
+        # pressing Connect again on a failed/stuck account re-queues it:
+        # refresh credentials, reset the retry budget, re-run the flow
+        # (reusing the bridge record upstream)
+        with STATE_LOCK:
+            existing.update(pwEnc=_enc(pw), tokenEnc=_enc(token),
+                            riskPct=min(max(risk, 0.1), 5.0), cent=cent,
+                            label=label or existing.get("label"),
+                            state="connecting", err=None,
+                            tries=0, lastTryT=0)
+            existing.pop("accountId", None)   # re-find / re-use upstream
+            STATE["mt5_deleted"] = [d for d in
+                                    (STATE.get("mt5_deleted") or [])
+                                    if d != key]
+            _save_state()
+        threading.Thread(target=_mt5_provision_thread, args=(existing,),
+                         daemon=True).start()
+        threading.Thread(target=_cloud_untombstone, args=(key,),
+                         daemon=True).start()
+        _cloud_dirty()
+        return jsonify(ok=True, id=existing["id"])
     acc = dict(id=_next_id(), login=login, server=server,
                broker="Exness" if "exness" in server.lower() else "MT5",
                label=label or None, pwEnc=_enc(pw), tokenEnc=_enc(token),
@@ -3590,8 +3640,15 @@ def api_mt5_connect():
                state="connecting", err=None)
     with STATE_LOCK:
         STATE["mt5"] = _mt5_accounts() + [acc]
+        # an explicit Connect overrides any old disconnect tombstone for
+        # this login+server — otherwise the account could never persist
+        # in the shared cloud state again
+        STATE["mt5_deleted"] = [d for d in (STATE.get("mt5_deleted") or [])
+                                if d != key]
         _save_state()
     threading.Thread(target=_mt5_provision_thread, args=(acc,),
+                     daemon=True).start()
+    threading.Thread(target=_cloud_untombstone, args=(key,),
                      daemon=True).start()
     _cloud_dirty()
     return jsonify(ok=True, id=acc["id"])

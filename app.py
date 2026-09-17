@@ -417,19 +417,12 @@ def maybe_sweep_alert(sw):
         STATE["lastSetupT"] = time.time()
     side_lbl = "Support" if sw["zoneSide"] == "demand" else "Resistance"
     icon = "🟢" if sw["direction"] == "LONG" else "🔴"
-    warn = "" if sw["grade"] == "A+" else \
-        f"\n⚠ dead-session entry — smaller size or skip"
-    _notify(f"{icon} {sw['grade']} SWEEP {sw['direction']} SIGNAL\n\n"
-            f"📊 Timeframe: 15M\n"
-            f"💰 Symbol: XAUUSD\n"
-            f"📍 Setup: Liquidity Sweep · {side_lbl} · EMA200-aligned\n\n"
+    act = "BUY" if sw["direction"] == "LONG" else "SELL"
+    _notify(f"{icon} {act} · XAUUSD 🧹\n\n"
             f"🎯 Entry: {sw['entry']:,.2f}\n"
             f"🛑 SL: {sw['sl']:,.2f}\n"
-            f"🎯 TP1: {sw['tp1']:,.2f} (half off · 1:1 RR)\n"
-            f"🎯 TP2: {sw['tp2']:,.2f} (runner · 1:2 RR)\n\n"
-            f"👉 Trade now on your own broker\n\n"
-            f"📊 Backtest: 57% win · +0.12R avg (EMA200-aligned reclaim)\n"
-            f"⭐ SNR Rating: {sw['grade']} SWEEP{warn}")
+            f"🎯 TP1: {sw['tp1']:,.2f}\n"
+            f"🎯 TP2: {sw['tp2']:,.2f} (2R)")
     track_signal("SWEEP", key, sw["direction"], sw["entry"], sw["sl"],
                  sw["tp1"], sw["tp2"])
 
@@ -464,10 +457,11 @@ _rot_alerted = {"keys": []}
 
 
 def maybe_rotation_alert(rt, stats=None):
-    """🔁 LIQUIDITY ROTATION trade card: both daily pools drained and the
-    second sweep reclaimed — trade the rotation back toward the spent side.
-    One alert per day; honest small-sample stats on the card."""
-    PHONE = True
+    """🔁 LIQUIDITY ROTATION: both daily pools drained and the second sweep
+    reclaimed. Web-feed only — its researched exit profile is TP2 1.5R
+    (75% win), which is BELOW the 2RR+ phone bar, and at 1:2 it wins only
+    56%. The rotation box in the web UI still shows the full story."""
+    PHONE = False
     if not rt:
         return
     if _event_blackout():
@@ -609,28 +603,19 @@ def maybe_momentum_alert(ent):
     entry = float(price)
     sl = entry - d * risk
     tp = entry + d * 0.75 * risk                # TP1 0.75R — half off, high hit rate
-    tp2 = entry + d * 1.5 * risk                # TP2 runner 1.5R
-    side = ent["zoneSide"]
-    lbl = "Support" if side == "demand" else "Resistance"
+    tp2 = entry + d * 2.0 * risk                # TP2 runner 2.0R — 2RR+ phone bar
     lo, hi = ent["entryZone"][0], ent["entryZone"][1]
-    icon = "\U0001F7E2" if d == 1 else "\U0001F534"
+    icon = "🟢" if d == 1 else "🔴"
+    act = "BUY" if d == 1 else "SELL"
     _web_alert("MOMENTUM",
-               f"\u26A1 momentum {ent['direction'].lower()} @ {entry:,.1f} \u00b7 "
-               f"SL {sl:,.1f} \u00b7 TP {tp:,.1f} \u00b7 {ent['passed']}/8 armed zone "
-               f"{lo:,.1f}\u2013{hi:,.1f}")
-    _notify(f"{icon} MOMENTUM {ent['direction']} SIGNAL\n\n"
-            f"\U0001F4CA Timeframe: 15M\n"
-            f"\U0001F4B0 Symbol: XAUUSD\n"
-            f"\U0001F4CD Setup: Trend continuation \u2014 armed {lbl} zone "
-            f"{lo:,.1f}\u2013{hi:,.1f} ({ent['passed']}/8)\n\n"
-            f"\U0001F3AF Entry: {entry:,.2f} (market now)\n"
-            f"\U0001F6D1 SL: {sl:,.2f}\n"
-            f"\U0001F3AF TP1: {tp:,.2f} (half off \u00b7 1:0.75 RR)\n"
-            f"\U0001F3AF TP2: {tp2:,.2f} (runner \u00b7 1:1.5 RR)\n\n"
-            f"\U0001F449 Trade now on your own broker\n\n"
-            f"\u2B50 SNR Rating: MOMENTUM ({ent['passed']}/8)\n"
-            f"\U0001F4CA Backtest: 68% win \u00b7 +0.18R avg (London/NY \u00b7 with EMA200 trend)\n"
-            f"\u26A0 Not a zone retest \u2014 momentum entry, smaller size")
+               f"⚡ momentum {ent['direction'].lower()} @ {entry:,.1f} · "
+               f"SL {sl:,.1f} · TP {tp:,.1f} · {ent['passed']}/8 armed zone "
+               f"{lo:,.1f}–{hi:,.1f} · 68% win profile · not a zone retest")
+    _notify(f"{icon} {act} · XAUUSD ⚡\n\n"
+            f"🎯 Entry: {entry:,.2f}\n"
+            f"🛑 SL: {sl:,.2f}\n"
+            f"🎯 TP1: {tp:,.2f}\n"
+            f"🎯 TP2: {tp2:,.2f} (2R)")
     track_signal("MOMENTUM", key, ent["direction"], entry, sl, tp, tp2)
 
 
@@ -904,26 +889,30 @@ def update_trade_tracker():
         head = {"TP1_HIT": "TP1 HIT", "TP2_HIT": "TP2 HIT", "SL_HIT": "SL HIT",
                 "BE_STOP": "BREAKEVEN STOP", "TIMEOUT": "TIMEOUT · 5h"}.get(typ, typ)
         ent_p, sl_p, tp1_p, tp2_p = tr["entry"], tr["sl"], tr["tp1"], tr["tp2"]
+        # R math from the trade's OWN levels (all phone signals are 2R+)
+        _risk = abs(ent_p - sl_p) or 1.0
+        _rr1 = abs(tp1_p - ent_p) / _risk
+        _rr2 = abs(tp2_p - ent_p) / _risk
         if typ == "TP1_HIT":
             body = (f"🎯 Entry: {ent_p:,.2f}\n"
-                    f"✅ TP1 reached: {tp1_p:,.2f} (+1.0R banked)\n"
+                    f"✅ TP1 reached: {tp1_p:,.2f}\n"
                     f"🛑 SL moved to breakeven {ent_p:,.2f}\n"
                     f"🎯 TP2 runner: {tp2_p:,.2f}\n\n"
                     f"⭐ Half position closed")
         elif typ == "TP2_HIT":
             body = (f"🎯 Entry: {ent_p:,.2f}\n"
-                    f"✅ TP1: {tp1_p:,.2f} (+1.0R)\n"
-                    f"🎯 TP2: {tp2_p:,.2f} (+1.5R runner)\n\n"
-                    f"⭐ Trade closed · Total +2.5R 🎉")
+                    f"✅ TP1: {tp1_p:,.2f}\n"
+                    f"🎯 TP2: {tp2_p:,.2f} ({_rr2:.1f}R)\n\n"
+                    f"⭐ Trade closed · Total +{0.5 * _rr1 + 0.5 * _rr2:.2f}R 🎉")
         elif typ == "SL_HIT":
             body = (f"🎯 Entry: {ent_p:,.2f}\n"
                     f"🛑 SL: {sl_p:,.2f} (-1.0R)\n\n"
                     f"⭐ Trade closed · next setup will come — patience")
         elif typ == "BE_STOP":
             body = (f"🎯 Entry: {ent_p:,.2f}\n"
-                    f"✅ TP1 banked: {tp1_p:,.2f} (+1.0R)\n"
+                    f"✅ TP1 banked: {tp1_p:,.2f}\n"
                     f"⚖️ Runner stopped at breakeven {ent_p:,.2f}\n\n"
-                    f"⭐ Trade closed · Total +1.0R")
+                    f"⭐ Trade closed · Total +{0.5 * _rr1:.2f}R")
         else:  # TIMEOUT
             r = tr.get("r") or 0.0
             body = (f"🎯 Entry: {ent_p:,.2f}\n"

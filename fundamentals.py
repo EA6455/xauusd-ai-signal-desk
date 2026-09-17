@@ -25,6 +25,18 @@ CAL_NEXT_URL = "https://nfs.faireconomy.media/ff_calendar_nextweek.json"
 WATCHER_URL = "https://t.me/s/WatcherGuru"
 GNEWS_URL = ("https://news.google.com/rss/search?q="
              "gold+OR+XAUUSD+OR+%22federal+reserve%22+when:1d&hl=en-US&gl=US&ceid=US:en")
+GNEWS_URL2 = ("https://news.google.com/rss/search?q="
+              "gold+price+forecast+OR+outlook+OR+analysis+when:2d"
+              "&hl=en-US&gl=US&ceid=US:en")
+
+# every online source the AI reads on its own, 24/7
+WIDE_FEEDS = [
+    ("investing", "https://www.investing.com/rss/news_11.rss"),
+    ("yahoo", "https://feeds.finance.yahoo.com/rss/2.0/headline?"
+              "s=GC=F&region=US&lang=en-US"),
+    ("marketwatch", "https://feeds.content.dowjones.io/public/rss/"
+                    "mw_topstories"),
+]
 
 _cal_mem = {"t": 0.0, "events": []}
 _macro_mem = {"t": 0.0, "macro": None}
@@ -201,6 +213,115 @@ def google_news(max_age=900, limit=12):
     else:
         _gnews_mem["failT"] = now
     return items
+
+
+_wide_mem = {"t": 0.0, "items": [], "fail": {}}
+
+
+def _rss_items(rss, limit=12):
+    """Parse an RSS body into (ts, title, source-unknown) tuples."""
+    out = []
+    now = time.time()
+    for m in re.finditer(r"<item>(.*?)</item>", rss, re.S):
+        blk = m.group(1)
+        t = re.search(r"<title>(.*?)</title>", blk, re.S)
+        d = re.search(r"<pubDate>(.*?)</pubDate>", blk, re.S)
+        if not t:
+            continue
+        title = _strip_tags(t.group(1))
+        try:
+            ts = datetime.strptime(d.group(1).strip(),
+                                   "%a, %d %b %Y %H:%M:%S %z").timestamp()
+        except Exception:  # noqa: BLE001
+            ts = now
+        out.append((int(ts), title))
+        if len(out) >= limit:
+            break
+    return out
+
+
+def wide_news(max_age=900, limit=24):
+    """ALL online sources merged: Google News (two queries), Investing.com
+    commodities, Yahoo gold-futures wire, MarketWatch. Deduped across
+    feeds, newest first. Per-feed failure backoff so one dead site never
+    stalls the loop. Returns (ts, title, source) tuples."""
+    now = time.time()
+    if now - _wide_mem["t"] < max_age and _wide_mem["items"]:
+        return _wide_mem["items"]
+    items = []
+    for q in (GNEWS_URL, GNEWS_URL2):
+        try:
+            for ts, title in _rss_items(_get(q, timeout=12), limit=12):
+                items.append((ts, title, "google"))
+        except Exception:  # noqa: BLE001
+            pass
+    for name, url in WIDE_FEEDS:
+        if now - _wide_mem["fail"].get(name, 0) < FAIL_BACKOFF:
+            continue
+        try:
+            for ts, title in _rss_items(_get(url, timeout=12), limit=12):
+                items.append((ts, title, name))
+        except Exception:  # noqa: BLE001
+            _wide_mem["fail"][name] = now
+    seen, deduped = set(), []
+    for ts, title, src in items:
+        key = re.sub(r"\s+", " ", title.lower()).strip()[:60]
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append((ts, title, src))
+    deduped.sort(key=lambda x: -x[0])
+    # round-robin across sources so every live feed is represented,
+    # not just the fastest publisher
+    by_src = {}
+    for it in deduped:
+        by_src.setdefault(it[2], []).append(it)
+    merged = []
+    while len(merged) < limit:
+        took = False
+        for src in sorted(by_src):
+            if by_src[src]:
+                merged.append(by_src[src].pop(0))
+                took = True
+                if len(merged) >= limit:
+                    break
+        if not took:
+            break
+    merged.sort(key=lambda x: -x[0])
+    _wide_mem.update(t=now, items=merged)
+    return _wide_mem["items"]
+
+
+_wmacro_mem = {"t": 0.0, "macro": None}
+
+
+def wide_macro(max_age=900):
+    """Extended macro panel: gold + silver (and the gold/silver ratio),
+    S&P 500 and oil — risk sentiment alongside the dollar/yield backdrop.
+    Cached 15 min."""
+    now = time.time()
+    if now - _wmacro_mem["t"] < max_age and _wmacro_mem["macro"]:
+        return _wmacro_mem["macro"]
+    out = {}
+    for key, sym in (("gc", "GC=F"), ("si", "SI=F"),
+                     ("spx", "%5EGSPC"), ("cl", "CL=F")):
+        try:
+            j = json.loads(_get(
+                f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}"
+                "?interval=1d&range=5d", timeout=10))
+            m = j["chart"]["result"][0]["meta"]
+            px = float(m["regularMarketPrice"])
+            prev = float(m.get("chartPreviousClose")
+                         or m.get("previousClose") or px)
+            out[key] = dict(price=round(px, 2),
+                            chgPct=round((px - prev) / prev * 100, 2)
+                            if prev else 0.0)
+        except Exception:  # noqa: BLE001
+            continue
+    if out.get("gc") and out.get("si") and out["si"]["price"]:
+        out["ratio"] = round(out["gc"]["price"] / out["si"]["price"], 1)
+    _wmacro_mem.update(t=now, macro=out or None)
+    return out or None
 
 
 _HOT_RE = re.compile(r"\b(" + "|".join(re.escape(k) for k in HOT_KEYS) + r")\b")

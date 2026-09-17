@@ -1917,8 +1917,9 @@ def _research_status():
         lines.append("📊 first digest posting with first scan")
     intel = r.get("intel") or {}
     if intel.get("headlines"):
-        lines.append(f"🌐 outside intel: "
-                     f"{intel['headlines'][0][:60]}")
+        lines.append(f"🌐 outside intel · "
+                     f"{intel.get('nSources', 1)} sources: "
+                     f"{intel['headlines'][0][:55]}")
     else:
         lines.append("🌐 outside intel: scanning news feeds")
     llmst = (r.get("llm") or {}).get("state")
@@ -1961,11 +1962,12 @@ def _research_intel():
     the DEVELOP topic when there is NEW material; always refreshes the
     intel cache that feeds the live status message. Runs 24/7."""
     try:
-        news = fundamentals.google_news(limit=10)
+        news = fundamentals.wide_news(limit=24)
     except Exception:  # noqa: BLE001
         news = []
     fresh = [(ts, t, s) for ts, t, s in (news or [])
-             if fundamentals.gold_relevant(t)][:6]
+             if fundamentals.gold_relevant(t)][:8]
+    nsrc = len({s for _ts, _t, s in news or []}) or 1
     try:
         evs = fundamentals.upcoming(hours=24, impacts=("High",))
     except Exception:  # noqa: BLE001
@@ -1974,6 +1976,10 @@ def _research_intel():
         mac = fundamentals.macro_snapshot() or {}
     except Exception:  # noqa: BLE001
         mac = {}
+    try:
+        wmac = fundamentals.wide_macro() or {}
+    except Exception:  # noqa: BLE001
+        wmac = {}
     now = int(time.time())
     r = STATE.get("research") or {}
     intel = r.get("intel") or {}
@@ -1983,10 +1989,16 @@ def _research_intel():
     intel.update(t=now, posted=(posted + [t.strip().lower()
                                           for _ts, t, _s in new])[-40:],
                  headlines=[t for _ts, t, _s in fresh],
+                 nSources=nsrc,
                  events=[dict(title=e.get("title"), minutesTo=e.get("minutesTo"),
                               country=e.get("country")) for e in evs[:3]],
                  dxy=(mac.get("dxy") or {}).get("price"),
-                 us10y=(mac.get("us10y") or {}).get("price"))
+                 us10y=(mac.get("us10y") or {}).get("price"),
+                 gc=(wmac.get("gc") or {}).get("price"),
+                 si=(wmac.get("si") or {}).get("price"),
+                 ratio=wmac.get("ratio"),
+                 spx=(wmac.get("spx") or {}),
+                 oil=(wmac.get("cl") or {}))
     r["intel"] = intel
     r["lastIntelT"] = now
     with STATE_LOCK:
@@ -1994,7 +2006,7 @@ def _research_intel():
         _save_state()
     if not new:
         return False
-    lines = [f"\U0001F310 OUTSIDE INTEL \u00b7 self-researched \u00b7 "
+    lines = [f"\U0001F310 OUTSIDE INTEL \u00b7 {nsrc} online sources \u00b7 "
              f"{time.strftime('%H:%M', time.gmtime(now))} UTC", ""]
     for _ts, t, _s in new[:4]:
         b = fundamentals.gold_bias(t)
@@ -2017,6 +2029,18 @@ def _research_intel():
             m.append(f"US10Y {us10y:.2f}%")
         lines += ["", "\U0001F4B5 macro: " + " \u00b7 ".join(m) +
                   " (dollar/yields up = headwind for gold)"]
+    spx = intel.get("spx") or {}
+    oil = intel.get("oil") or {}
+    ext = []
+    if intel.get("ratio"):
+        ext.append(f"Au/Ag ratio {intel['ratio']}")
+    if spx.get("price"):
+        ext.append(f"S&P 500 {spx['price']:,.0f} "
+                   f"{spx.get('chgPct', 0):+.1f}%")
+    if oil.get("price"):
+        ext.append(f"WTI {oil['price']:.1f} {oil.get('chgPct', 0):+.1f}%")
+    if ext:
+        lines.append("\U0001F30D risk board: " + " \u00b7 ".join(ext))
     lines += ["", "\U0001F9EA research note: outside info feeds the "
               "backtest context \u2014 full analysis in the hourly digest"]
     _notify("\n".join(lines), cat="develop")
@@ -2062,13 +2086,35 @@ def _llm_researcher():
     for v in res.get("variants", []):
         brief.append(f"- {v['name']}: {_fr(v.get('full'))} | {_fr(v.get('oos'))}")
     if intel.get("headlines"):
-        brief.append("Latest outside headlines: " + "; ".join(
-            intel["headlines"][:4]))
+        brief.append("Outside headlines from " + str(
+            intel.get("nSources", 1)) + " online sources: "
+            + "; ".join(intel["headlines"][:8]))
     if intel.get("events"):
         brief.append("Upcoming high-impact events: " + "; ".join(
             f"{e['title']} in {e['minutesTo']}m" for e in intel["events"]))
-    if intel.get("dxy") or intel.get("us10y"):
-        brief.append(f"Macro: DXY {intel.get('dxy')}, US10Y {intel.get('us10y')}")
+    mac_line = []
+    if intel.get("dxy"):
+        mac_line.append(f"DXY {intel['dxy']}")
+    if intel.get("us10y"):
+        mac_line.append(f"US10Y {intel['us10y']}%")
+    if intel.get("ratio"):
+        mac_line.append(f"gold/silver ratio {intel['ratio']}")
+    spx = intel.get("spx") or {}
+    if spx.get("price"):
+        mac_line.append(f"S&P500 {spx['price']} ({spx.get('chgPct', 0):+.1f}%)")
+    oil = intel.get("oil") or {}
+    if oil.get("price"):
+        mac_line.append(f"WTI {oil['price']} ({oil.get('chgPct', 0):+.1f}%)")
+    if mac_line:
+        brief.append("Macro/risk board: " + ", ".join(mac_line))
+    upg = r.get("upgrade") or {}
+    cfg = (f"Current live system config: {upg.get('gate', 'delta')}-gate, "
+           f"exit ratio {upg.get('exit', [1.0, 2.0])[0]:g}:"
+           f"{upg.get('exit', [1.0, 2.0])[1]:g}")
+    if upg.get("pending"):
+        cfg += (f", pending upgrade {upg['pending'].get('name')} "
+                f"({upg['pending'].get('streak', 1)} consecutive checks)")
+    brief.append(cfg)
     ideas = (r.get("llm") or {}).get("ideas") or []
     if ideas:
         brief.append("Your earlier research ideas (follow up — keep the "

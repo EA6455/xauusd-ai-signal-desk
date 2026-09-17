@@ -2411,7 +2411,10 @@ def health():
                    telegram=bool(TG_TOKEN and TG_CHAT),
                    topics=_tg_topics(),
                    research=dict(cycles=r.get("cycles", 0),
-                                 lastCycleT=r.get("lastCycleT")))
+                                 lastCycleT=r.get("lastCycleT"),
+                                 scans=r.get("scans", 0),
+                                 lastScanT=r.get("lastScanT"),
+                                 statusMsg=(r.get("statusMsg") or {}).get("id")))
 
 
 # Start the realtime feed + background loop at import time so WSGI servers

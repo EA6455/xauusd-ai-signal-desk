@@ -867,6 +867,11 @@ DELTA_VOL_WINDOW = 20
 DELTA_EMA_FAST = 9
 DELTA_EMA_SLOW = 21
 DELTA_STRONG = 0.15          # |EMA9| above this = strong pressure
+MAX_STOP_DIST = 100.0        # hard stop cap: 1000 pips on gold (1 pip = $0.1).
+                             # Any signal whose natural stop is wider than
+                             # this is skipped entirely — a loss can never
+                             # exceed 1000 pips. (Backtest: only 1 of 13
+                             # cohort signals ever breached it, at $112.7.)
 
 
 def _delta_parts(candles):
@@ -981,6 +986,8 @@ def cohort_stats(candles15):
     for s in setups:
         if s["grade"] not in ("A+", "B+"):
             continue
+        if abs(s["entry"] - s["sl"]) > MAX_STOP_DIST:
+            continue                      # 1000-pip cap: never carded anyway
         d = 1 if s["dir"] == "LONG" else -1
         cont = False
         i = s["i"]

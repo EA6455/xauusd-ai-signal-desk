@@ -405,6 +405,12 @@ def _postpone_note(ent, title):
 _sweep_alerted = {"keys": []}
 
 
+def _stop_cap_ok(entry, sl):
+    """1000-pip hard stop cap ($100 on gold): a signal whose stop is wider
+    than this can never reach the phone — max possible loss per signal."""
+    return abs(float(entry) - float(sl)) <= entries.MAX_STOP_DIST
+
+
 def maybe_sweep_alert(sw):
     """Liquidity-sweep watch: web feed only (recent 60d stats below the phone
     bar — flip PHONE=True to also send cards). One alert per sweep event."""
@@ -430,6 +436,11 @@ def maybe_sweep_alert(sw):
     side_lbl = "Support" if sw["zoneSide"] == "demand" else "Resistance"
     icon = "🟢" if sw["direction"] == "LONG" else "🔴"
     act = "BUY" if sw["direction"] == "LONG" else "SELL"
+    if not _stop_cap_ok(sw["entry"], sw["sl"]):
+        _web_alert("SWEEP", f"⏸ sweep skipped — stop distance "
+                            f"${abs(sw['entry'] - sw['sl']):,.0f} exceeds the "
+                            f"1000-pip cap")
+        return
     _notify(f"{icon} {act} · XAUUSD 🧹\n\n"
             f"🎯 Entry: {sw['entry']:,.2f}\n"
             f"🛑 SL: {sw['sl']:,.2f}\n"
@@ -614,6 +625,10 @@ def maybe_momentum_alert(ent):
     risk = 2.5 * a                              # stop distance = 2.5×ATR (high-win)
     entry = float(price)
     sl = entry - d * risk
+    if not _stop_cap_ok(entry, sl):
+        _web_alert("MOMENTUM", f"⏸ momentum skipped — stop distance "
+                               f"${risk:,.0f} exceeds the 1000-pip cap")
+        return
     tp = entry + d * 0.75 * risk                # TP1 0.75R — half off, high hit rate
     tp2 = entry + d * 2.0 * risk                # TP2 runner 2.0R — 2RR+ phone bar
     lo, hi = ent["entryZone"][0], ent["entryZone"][1]
@@ -648,6 +663,11 @@ def maybe_setup_alert(ent, elite_stats=None):
     elite = bool(ent.get("contZone")) and grade in ("A+", "B+")
     base = elite or grade == "A+"
     phone = base and bool(ent.get("deltaOK"))
+    if phone and not _stop_cap_ok(ent["entry"], ent["sl"]):
+        phone = False
+        cap_skip = True
+    else:
+        cap_skip = False
     key = (ent.get("zoneKey") or f"{ent['direction']}:{ent['barTime']}") + ":" + grade
     with STATE_LOCK:
         if STATE.get("lastSetup") == key:
@@ -655,7 +675,10 @@ def maybe_setup_alert(ent, elite_stats=None):
         STATE["lastSetup"] = key
         if not phone:
             # below the quality bar — web-feed watch line only, no card
-            if base:
+            if cap_skip:
+                why = (f"stop distance ${abs(ent['entry'] - ent['sl']):,.0f} "
+                       "exceeds the 1000-pip cap")
+            elif base:
                 why = ("delta not confirmed — order flow "
                        f"{ent.get('deltaState') or 'flat'} · delta-against "
                        "setups win only 40-50%")

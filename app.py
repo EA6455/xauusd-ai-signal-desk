@@ -2954,9 +2954,16 @@ def cloud_load():
         import base64
         blob = json.loads(base64.b64decode(j["content"]))
         _cloud_mem["sha"] = j.get("sha")
+        dead = set(blob.get("mt5_deleted") or [])
         with STATE_LOCK:
-            if blob.get("mt5") and not STATE.get("mt5"):
-                STATE["mt5"] = blob["mt5"]
+            loc = {f"{a.get('login')}|{a.get('server')}": a
+                   for a in (STATE.get("mt5") or [])}
+            for a in blob.get("mt5") or []:
+                k = f"{a.get('login')}|{a.get('server')}"
+                if k not in dead and k not in loc:
+                    loc[k] = a              # remote account this machine lost
+            STATE["mt5"] = [a for k, a in loc.items()
+                            if k not in dead]
             if blob.get("autoexec") and not STATE.get("autoexec"):
                 STATE["autoexec"] = blob["autoexec"]
             _save_state()
@@ -2977,8 +2984,35 @@ def cloud_save(force=False):
     _cloud_mem.update(busy=True, t=now, dirty=False)
     try:
         import base64
-        blob = dict(mt5=STATE.get("mt5") or [],
-                    autoexec=STATE.get("autoexec"))
+        # MERGE with the remote copy: a machine whose local state is empty
+        # (fresh boot, test run) must never wipe accounts another machine
+        # saved. Local entries win (fresher); tombstoned ones are dropped.
+        remote = {}
+        try:
+            cur = _cloud_req("GET", f"/repos/{STATE_REPO}/contents/"
+                                    f"state.json")
+            if cur and cur.get("content") is not None:
+                remote = json.loads(base64.b64decode(cur["content"]))
+                _cloud_mem["sha"] = cur.get("sha")
+        except Exception:  # noqa: BLE001  — nothing saved yet
+            remote = {}
+        dead = set(STATE.get("mt5_deleted") or [])
+        if remote.get("mt5_deleted"):
+            dead |= set(remote["mt5_deleted"])
+        merged = {f"{a.get('login')}|{a.get('server')}": a
+                  for a in (remote.get("mt5") or [])
+                  if f"{a.get('login')}|{a.get('server')}" not in dead}
+        for a in STATE.get("mt5") or []:
+            k = f"{a.get('login')}|{a.get('server')}"
+            if k not in dead:
+                merged[k] = a                      # local wins (fresher)
+        rae = remote.get("autoexec") or {}
+        lae = STATE.get("autoexec") or {}
+        ae = lae if (lae.get("totalTrades", 0) >=
+                     rae.get("totalTrades", 0)) else rae
+        blob = dict(mt5=list(merged.values())[:20],
+                    autoexec=ae,
+                    mt5_deleted=sorted(dead)[-50:])
         body = dict(message="state sync",
                     content=base64.b64encode(
                         json.dumps(blob).encode()).decode())
@@ -3526,6 +3560,9 @@ def api_mt5_delete(aid):
             pass
     with STATE_LOCK:
         STATE["mt5"] = [a for a in _mt5_accounts() if a.get("id") != aid]
+        _dl = list(STATE.get("mt5_deleted") or [])
+        _dl.append(f"{acc.get('login')}|{acc.get('server')}")
+        STATE["mt5_deleted"] = _dl[-50:]
         _save_state()
     cloud_save(force=True)
     return jsonify(ok=True)

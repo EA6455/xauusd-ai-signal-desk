@@ -500,6 +500,16 @@
         <div id="trkBody"><div class="muted small">no live signal — waiting for an A+ setup</div></div>
       </div>
 
+      <div class="card" id="aiTraderCard">
+        <div class="card-head"><h2>🧠 AI Trader · Best Signal</h2>
+          <span class="muted small" id="aiTraderSum">asking the AI research desk…</span></div>
+        <div id="aiTraderBody"><div class="muted small">no call yet — press the button below</div></div>
+        <div style="margin-top:10px; display:flex; gap:10px; align-items:center; flex-wrap:wrap">
+          <button id="aiTraderBtn" class="mt5-btn" style="flex:none">Ask the AI trader now</button>
+          <span class="small muted">the AI research desk's own best trade — the gated SNR engine still owns live orders</span>
+        </div>
+      </div>
+
       <div class="card" id="mt5Card">
         <div class="card-head"><h2>🤖 Live Auto-Trade · MT5</h2>
           <span class="muted small" id="mt5Sum">paper engine armed</span></div>
@@ -2333,6 +2343,60 @@ const INITIAL = {{ payload|tojson }};
   document.addEventListener('visibilitychange', () => {
     if(!document.hidden){ load(false); loadEntry(); }
   });
+
+  // ---------- AI trader (best signal) ----------
+  function aiTraderRender(j){
+    const s = j && j.sig;
+    const btn = $('aiTraderBtn');
+    if(btn) btn.disabled = !!j.busy;
+    if(!s){
+      $('aiTraderSum').textContent = (j && j.err) ? '⚠ ' + j.err : 'warming up…';
+      $('aiTraderBody').innerHTML = '<div class="muted small">no call yet — press the button below</div>';
+      return;
+    }
+    const age = (s.age != null) ? (s.age < 90 ? s.age + 's old' : Math.round(s.age / 60) + 'm old') : '';
+    if(s.direction === 'none'){
+      $('aiTraderSum').textContent = 'stand aside · ' + age;
+      $('aiTraderBody').innerHTML = '<div class="mt5-acc"><b>⚪ STAND ASIDE</b>'
+        + '<span class="muted">' + (s.thesis || 'no A+ location right now') + '</span>'
+        + '<span class="muted small">' + (s.model || '') + ' · ' + age + '</span></div>';
+      return;
+    }
+    $('aiTraderSum').textContent = s.direction.toUpperCase() + ' · conf '
+      + Math.round((s.conf || 0) * 100) + '% · ' + age;
+    const col = s.direction === 'buy' ? '#22c55e' : '#ef4444';
+    const num = v => (+v).toLocaleString(undefined, {minimumFractionDigits: 2});
+    $('aiTraderBody').innerHTML =
+      '<div class="mt5-acc"><b style="color:' + col + '">'
+      + (s.direction === 'buy' ? '🟢 BUY' : '🔴 SELL') + ' · XAUUSD · ' + (s.style || 'intraday') + '</b>'
+      + '<span class="mono">🎯 ' + num(s.entry) + ' · 🛑 ' + num(s.stop) + ' · 🏁 ' + num(s.target) + '</span>'
+      + '<span class="muted">R:R 1:' + (s.rr != null ? s.rr : '—') + ' · risk '
+      + (s.riskAtr != null ? s.riskAtr : '—') + '×ATR · confidence '
+      + Math.round((s.conf || 0) * 100) + '%</span>'
+      + (s.thesis ? '<span class="muted">🗣 ' + s.thesis + '</span>' : '')
+      + (s.invalidation ? '<span class="muted">❌ dead if: ' + s.invalidation + '</span>' : '')
+      + '<span class="muted small">' + (s.provider || '') + ' · ' + (s.model || '') + ' · ' + age + '</span></div>';
+  }
+  async function aiTraderLoad(){
+    try{
+      const r = await apiFetch('/api/ai/trader');
+      aiTraderRender(await r.json());
+    }catch(e){}
+  }
+  $('aiTraderBtn').addEventListener('click', async () => {
+    const b = $('aiTraderBtn');
+    b.disabled = true; b.textContent = 'thinking…';
+    try{
+      const r = await apiFetch('/api/ai/trader', {method: 'POST'});
+      const j = await r.json();
+      if(!r.ok) throw new Error(j.error || 'failed');
+      aiTraderRender({sig: j.sig, busy: false});
+      toast('AI trader call ready');
+    }catch(e){ toast('⚠ ' + (e.message || 'AI trader failed')); }
+    finally{ b.disabled = false; b.textContent = 'Ask the AI trader now'; }
+  });
+  aiTraderLoad();
+  setInterval(() => { if(!document.hidden) aiTraderLoad(); }, 60000);
 
   // ---------- MT5 live auto-trade ----------
   async function mt5Load(){

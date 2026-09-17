@@ -2696,7 +2696,295 @@ def _llm_researcher():
     with STATE_LOCK:
         STATE["research"] = r
         _save_state()
+    # the researcher also refreshes its trader call — best signal
+    threading.Thread(target=ai_trader, kwargs={"auto": True},
+                     daemon=True).start()
     return True
+
+
+# ---------------------------------------------------- AI TRADER
+# The external-AI research desk's trader mode: reads the same data the
+# desk sees (candles, SNR zones, market delta, 8-model consensus, macro,
+# events, live record) and calls its single best trade like a senior
+# discretionary gold trader — direction, entry, stop, target, style,
+# confidence and a trader's thesis. Strictly validated against the live
+# 15m ATR (sane stop, real RR, entry near market). Never auto-executed:
+# the gated SNR engine owns live orders. Panel button (manual, always
+# posts) + hourly auto-refresh alongside the research brief (auto posts
+# only NEW actionable calls, max one per 45 min).
+
+_AI_TRADER_SYS = (
+    """You are a senior discretionary XAUUSD (gold) trader with 15 years
+of screen time, trading your own account. Read the desk data below and
+call your SINGLE best trade for the next few hours. Think like a
+trader: location first (fresh SNR zones, structure, HTF trend), then
+confirmation (delta pressure, structure shift), then risk (ATR-based
+stop, reward at least 1.5x risk when possible). Reply with ONLY compact
+JSON, no markdown fences:
+{"direction":"buy|sell|none","entry":<price>,"stop":<price>,
+"target":<price>,"confidence":0.0-1.0,"style":"scalp|intraday|swing",
+"thesis":"max 45 words, trader language",
+"invalidation":"max 15 words"}
+Use "none" honestly when there is no A+ location right now - real
+traders stand aside. Entry may be market or a limit at a zone; stop and
+target must fit the direction and the ATR given."""
+)
+
+_ai_trader_mem = dict(t=0.0, sig=None, busy=False, lastErr=None,
+                      lastPost=dict(t=0.0, key=""))
+
+
+def _ai_trader_brief():
+    """Everything a pro trader would look at, as compact text."""
+    try:
+        c15 = data.get_candles("15m").get("candles") or []
+        c60 = data.get_candles("60m").get("candles") or []
+        c1d = data.get_candles("1d").get("candles") or []
+    except Exception:  # noqa: BLE001
+        return None, None, None
+    if len(c15) < 220 or len(c60) < 220:
+        return None, None, None
+    try:
+        spot, _src = tick_spot(broker=False)
+    except Exception:  # noqa: BLE001
+        spot = None
+    spot = float(spot or c15[-1]["c"])
+    trs = []
+    for i in range(len(c15) - 15, len(c15) - 1):
+        h, l, pc = (float(c15[i]["h"]), float(c15[i]["l"]),
+                    float(c15[i - 1]["c"]))
+        trs.append(max(h - l, abs(h - pc), abs(l - pc)))
+    atr = round(sum(trs) / max(1, len(trs)), 2) or 2.0
+
+    def rows(cl, k):
+        out = []
+        for c in cl[-k:]:
+            hh = time.strftime("%H:%M", time.gmtime(c["t"]))
+            out.append(f"{hh} O{float(c['o']):.1f} H{float(c['h']):.1f} "
+                       f"L{float(c['l']):.1f} C{float(c['c']):.1f}")
+        return "; ".join(out)
+
+    lines = [
+        "UTC now: " + time.strftime("%a %H:%M", time.gmtime()),
+        "Session: " + str(entries.session_of(time.time())),
+        f"XAUUSD spot: {spot:,.2f} · 15m ATR(14): {atr}",
+        f"15m last 8 bars: {rows(c15, 8)}",
+        f"1H last 6 bars: {rows(c60, 6)}",
+        f"1D last 4 bars: {rows(c1d, 4)}",
+    ]
+    try:
+        ent = entries.evaluate(c15, c60)
+    except Exception:  # noqa: BLE001
+        ent = None
+    if ent:
+        lines.append(
+            f"Desk SNR setup: {ent['direction']} grade {ent['grade']} "
+            f"(active={ent['active']}, touching={ent['touching']}) "
+            f"entry~{ent['entry']} SL {ent['sl']} TP1 {ent['tp1']} "
+            f"TP2 {ent['tp2']} · 1H {ent['trend1h']}")
+    else:
+        lines.append("Desk SNR setup: none armed (zones may be arming)")
+    try:
+        zones = entries.zone_radar(c15, c60, price=spot, max_zones=6)
+        if zones:
+            lines.append("SNR zones near price (nearest first): " + "; ".join(
+                f"{z['tf']} {z['side']} {z['bottom']:.0f}-{z['top']:.0f} "
+                f"{z['status']} ({z['passed']}/5)" for z in zones))
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        dv = entries.delta_view(c15)
+        if dv:
+            d = (f"Market delta: {dv['state']}, "
+                 f"{round(dv['buyPct'] * 100)}% buy volume")
+            if dv.get("divergence"):
+                d += f", divergence {dv['divergence']}"
+            lines.append(d)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        dsk = get_ai_desk() or {}
+        c = dsk.get("consensus") or {}
+        if c:
+            lines.append(f"8-model consensus: {c.get('label')} "
+                         f"(score {float(c.get('score') or 0):+.2f})")
+        for s in ((dsk.get("llm") or {}).get("seats") or []):
+            lines.append(f"External AI {s['name']}: {s['verdict']} "
+                         f"conf {s['conf']}")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        f = fundamentals.snapshot() or {}
+        m = f.get("macro") or {}
+        mac = []
+        for k, lbl in (("dxy", "DXY"), ("us10y", "US10Y")):
+            if m.get(k):
+                mac.append(f"{lbl} {m[k].get('chgPct', 0):+.2f}%")
+        if mac:
+            lines.append("Macro: " + ", ".join(mac) + " (up = gold headwind)")
+        nx = f.get("nextHigh") or {}
+        if nx.get("title"):
+            lines.append(f"Next high-impact event: {nx['title']} "
+                         f"in {nx.get('minutesTo', '?')}m")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        res = ((STATE.get("research") or {}).get("last") or {})
+        prod = (res.get("production") or {}).get("full") or {}
+        if prod.get("n"):
+            lines.append(f"Desk live record: {prod['n']} trades, "
+                         f"{round((prod.get('win') or 0) * 100)}% win, "
+                         f"{prod.get('avgR', 0):+.2f}R avg")
+    except Exception:  # noqa: BLE001
+        pass
+    return "\n".join(lines), spot, atr
+
+
+def _ai_trader_parse(txt):
+    if not txt:
+        return None
+    import re as _re
+    m = _re.search(r"\{.*\}", txt, _re.S)
+    if not m:
+        return None
+    try:
+        j = json.loads(m.group(0))
+    except Exception:  # noqa: BLE001
+        return None
+    return j if isinstance(j, dict) else None
+
+
+def _ai_trader_check(j, spot, atr):
+    """Validate + normalize the trader's call. None if it does not hold
+    up against the live market (sane stop, real RR, entry near price)."""
+    if not j:
+        return None
+    d = str(j.get("direction") or "").lower()
+    if d == "long":
+        d = "buy"
+    elif d == "short":
+        d = "sell"
+    if d not in ("buy", "sell", "none"):
+        return None
+    style = str(j.get("style") or "intraday").lower()
+    style = style if style in ("scalp", "intraday", "swing") else "intraday"
+    try:
+        conf = min(0.95, max(0.05, float(j.get("confidence"))))
+    except (TypeError, ValueError):
+        conf = 0.5
+    thesis = str(j.get("thesis") or j.get("note") or "").strip()[:300]
+    inval = str(j.get("invalidation") or "").strip()[:160]
+    if d == "none":
+        return dict(direction="none", conf=round(conf, 2), style=style,
+                    thesis=thesis or "no A+ location — standing aside",
+                    invalidation=inval)
+    try:
+        entry, stop, target = (float(j.get("entry")), float(j.get("stop")),
+                               float(j.get("target")))
+    except (TypeError, ValueError):
+        return None
+    if spot <= 0:
+        return None
+    if abs(entry - spot) > 0.010 * spot:       # >1% from market = fantasy
+        return None
+    risk = (entry - stop) if d == "buy" else (stop - entry)
+    rew = (target - entry) if d == "buy" else (entry - target)
+    if risk <= 0 or rew <= 0:
+        return None
+    a = atr if atr and atr > 0 else max(2.0, spot * 0.001)
+    if not 0.25 * a <= risk <= 4.0 * a:        # sane vs live volatility
+        return None
+    rr = rew / risk
+    if rr < 1.1:                               # a pro's best call pays
+        return None
+    return dict(direction=d, entry=round(entry, 2), stop=round(stop, 2),
+                target=round(target, 2), rr=round(rr, 1),
+                riskAtr=round(risk / a, 2), conf=round(conf, 2),
+                style=style, thesis=thesis, invalidation=inval)
+
+
+def _ai_trader_post(sig):
+    """Signal-topic card, styled like the desk's own signal cards."""
+    m = sig.get("model") or "AI"
+    if sig["direction"] == "none":
+        _notify(f"\U0001F9E0 AI TRADER · {m}\n\n"
+                f"\u26aa STAND ASIDE — {sig.get('thesis') or 'no A+ location'}\n\n"
+                f"\u26a0 AI research opinion — not the auto-trade engine",
+                cat="signal")
+        return
+    arrow = "\U0001F7E2 BUY" if sig["direction"] == "buy" else "\U0001F534 SELL"
+    _notify(
+        f"\U0001F9E0 AI TRADER · {m}\n\n"
+        f"{arrow} · XAUUSD · {sig.get('style')}\n\n"
+        f"\U0001F3AF Entry {sig['entry']:,.2f}\n"
+        f"\U0001F6D1 SL {sig['stop']:,.2f}\n"
+        f"\U0001F3C1 TP {sig['target']:,.2f}\n\n"
+        f"R:R 1:{sig['rr']:g} · risk {sig['riskAtr']:g}×ATR · "
+        f"confidence {round(sig['conf'] * 100)}%\n"
+        f"\U0001F5E3 {sig.get('thesis') or '—'}\n"
+        f"\u274C dead if: {sig.get('invalidation') or '—'}\n\n"
+        f"\u26a0 AI research opinion — not the auto-trade engine",
+        cat="signal")
+
+
+def ai_trader(force=False, auto=False):
+    """Generate the AI trader's best signal. force=True re-runs even if
+    a fresh call exists (the panel button); auto=True is the hourly
+    refresh which posts only NEW actionable calls."""
+    import llm_desk
+    if _ai_trader_mem["busy"]:
+        return _ai_trader_mem.get("sig")
+    if (not force and _ai_trader_mem["sig"]
+            and time.time() - _ai_trader_mem["t"] < 900):
+        return _ai_trader_mem["sig"]
+    conf = llm_desk.configured()
+    if not conf:
+        _ai_trader_mem["lastErr"] = "no AI provider key configured"
+        return None
+    _ai_trader_mem.update(busy=True)
+    try:
+        k = conf[0]
+        p = llm_desk.PROVIDERS[k]
+        key = os.environ.get(p["key_env"])
+        model = os.environ.get(p["model_env"]) or p["model"]
+        brief, spot, atr = _ai_trader_brief()
+        if not brief:
+            _ai_trader_mem["lastErr"] = "market data not warm yet"
+            return None
+        call = llm_desk._CALLS[k]
+        sys_txt = (_AI_TRADER_SYS + f" Current spot {spot:,.2f}, 15m ATR "
+                   f"{atr} — entry/stop/target must be consistent.")
+        txt = sig = None
+        for _attempt in (1, 2):               # one corrective retry
+            try:
+                txt = call(key, model, brief, sys_txt)
+            except Exception as e:  # noqa: BLE001
+                _ai_trader_mem["lastErr"] = str(e)[:200]
+                return None
+            sig = _ai_trader_check(_ai_trader_parse(txt), spot, atr)
+            if sig:
+                break
+            brief += ("\n\nYour previous reply was rejected: it must be "
+                      "compact JSON with direction/entry/stop/target "
+                      "consistent with the spot and ATR (stop 0.25-4 ATR "
+                      "away, reward >= 1.1x risk), or direction \"none\". "
+                      "Call your best trade again.")
+        if not sig:
+            sig = dict(direction="none", conf=0.5, style="intraday",
+                       thesis="model reply did not pass the risk checks — "
+                              "standing aside", invalidation="")
+        sig.update(t=int(time.time()), provider=p["name"], model=model,
+                   spot=round(spot, 2), atr=atr)
+        _ai_trader_mem.update(t=sig["t"], sig=sig, lastErr=None)
+        if force or (auto and sig["direction"] != "none"):
+            pk = f"{sig['direction']}:{sig.get('entry')}:{sig.get('stop')}"
+            lp = _ai_trader_mem["lastPost"]
+            if force or (pk != lp["key"] or time.time() - lp["t"] > 2700):
+                _ai_trader_post(sig)
+                _ai_trader_mem["lastPost"] = dict(t=time.time(), key=pk)
+        return sig
+    finally:
+        _ai_trader_mem["busy"] = False
 
 
 # ------------------------------------------------- self-upgrade engine
@@ -3688,6 +3976,24 @@ def api_mt5_delete(aid):
         _save_state()
     cloud_save(force=True)
     return jsonify(ok=True)
+
+
+@app.route("/api/ai/trader")
+def api_ai_trader_get():
+    sig = _ai_trader_mem.get("sig")
+    if sig:
+        sig = dict(sig, age=int(time.time() - sig.get("t", 0)))
+    return jsonify(sig=sig, busy=_ai_trader_mem["busy"],
+                   err=_ai_trader_mem.get("lastErr"))
+
+
+@app.route("/api/ai/trader", methods=["POST"])
+def api_ai_trader_run():
+    sig = ai_trader(force=True)
+    if sig is None:
+        return jsonify(error=_ai_trader_mem.get("lastErr")
+                       or "AI trader unavailable"), 503
+    return jsonify(sig=dict(sig, age=0))
 
 
 @app.route("/api/trades")

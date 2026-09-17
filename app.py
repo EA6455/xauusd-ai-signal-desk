@@ -78,8 +78,15 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "2.9.0"
+SYSTEM_VERSION = "2.9.1"
 SYSTEM_CHANGELOG = {
+    "2.9.1": [
+        "Realtime price tape rebuilt as a 4-stream aggregate (OKX PAXG + "
+        "OKX XAUT + Binance + Bybit) — TradingView-style, median-merged, "
+        "several updates per second instead of one every ~5s",
+        "Zero-timer chain: every tick wakes the stream instantly; "
+        "/api/feed shows live per-stream density",
+    ],
     "2.9.0": [
         "Every-timeframe signal analysis: 15m · 1H · 2H · 4H · 1D scanned "
         "every minute — trend, zones and setup state per TF",
@@ -4553,6 +4560,11 @@ def api_ai_trader_run():
         return jsonify(error=_ai_trader_mem.get("lastErr")
                        or "AI trader unavailable"), 503
     return _ai_trader_payload(sig=sig)
+
+
+@app.route("/api/feed")
+def api_feed():
+    return jsonify(feeds=wsfeed.stats())
 
 
 @app.route("/api/mtf")

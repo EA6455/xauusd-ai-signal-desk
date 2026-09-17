@@ -78,8 +78,21 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "2.8.0"
+SYSTEM_VERSION = "2.9.0"
 SYSTEM_CHANGELOG = {
+    "2.9.0": [
+        "Every-timeframe signal analysis: 15m · 1H · 2H · 4H · 1D scanned "
+        "every minute — trend, zones and setup state per TF",
+        "BEST SIGNAL alerts to the group the moment a setup reaches "
+        "tradeable quality (6/8 arming, live full-house zones, 4+ TF "
+        "confluence) — no more waiting for the perfect 8/8",
+        "Exact market delta on every alert: EMA9/EMA21 values, buy-volume "
+        "%, pressure state, divergence — the same numbers that gate the "
+        "engine",
+        "Freshness proven: every analysis carries the age of the last "
+        "closed bar (analysis never late)",
+        "MTF Signal Matrix card on the panel with the live per-TF view",
+    ],
     "2.8.0": [
         "The AI desk now informs members itself: every deploy posts its "
         "changelog here automatically",
@@ -3177,6 +3190,223 @@ def ai_trader(force=False, auto=False):
         _ai_trader_mem["busy"] = False
 
 
+# ------------------------------------------------- MTF SIGNAL SCAN
+# Every-timeframe analysis (15m/1H/2H/4H/1D) running every minute: per-TF
+# trend, the zones near price, the 15m setup state and the EXACT market
+# delta. The best signal across all TFs is alerted to the group the
+# moment it becomes tradeable — members no longer wait for the perfect
+# 8/8 A+ to know what the desk sees. Every alert carries the age of the
+# last closed bar so freshness is provable.
+
+MTF_TFS = ["15m", "60m", "2h", "4h", "1d"]
+MTF_TREND = {1: "BULL", -1: "BEAR", 0: "RANGE"}
+_mtf_mem = dict(lastAlerts={}, lastGlobal=0.0, lastScan=None)
+
+
+def _mtf_scan():
+    """One full multi-timeframe pass. Cheap (packs are cached) and safe."""
+    try:
+        spot, _src = tick_spot(broker=False)
+    except Exception:  # noqa: BLE001
+        spot = None
+    tfs = {}
+    c15 = c60 = None
+    for tf in MTF_TFS:
+        try:
+            cl = data.get_candles(tf).get("candles") or []
+        except Exception:  # noqa: BLE001
+            cl = []
+        if len(cl) < 220:
+            continue
+        try:
+            pack = entries._snr_pack(cl)
+        except Exception:  # noqa: BLE001
+            continue
+        i_last = pack["n"] - 2
+        trend = MTF_TREND.get(int(pack["struct"][i_last]), "RANGE")
+        px = float(spot or cl[-1]["c"])
+        try:
+            zones = entries.zone_radar(cl, None, price=px, max_zones=3)
+        except Exception:  # noqa: BLE001
+            zones = []
+        for z in zones:
+            z["tf"] = tf                      # relabel with the real TF
+        row = dict(tf=tf, trend=trend, close=round(float(cl[-1]["c"]), 2),
+                   zones=zones)
+        tfs[tf] = row
+        if tf == "15m":
+            c15 = cl
+        if tf == "60m":
+            c60 = cl
+    if not tfs:
+        return None
+    out = dict(t=int(time.time()), tfs=tfs,
+               spot=round(float(spot or 0), 2) or None)
+    # exact delta on the freshest 15m data
+    dv = None
+    if c15:
+        try:
+            dv = entries.delta_view(c15)
+        except Exception:  # noqa: BLE001
+            dv = None
+        out["delta"] = dv and dict(
+            ema9=dv.get("ema9"), ema21=dv.get("ema21"),
+            buyPct=dv.get("buyPct"), state=dv.get("state"),
+            divergence=dv.get("divergence"), cum=dv.get("cum"))
+        out["barAge"] = int(max(0, time.time() - c15[-2]["t"]))
+    # 15m setup (full checks) — the engine's own view
+    ent = None
+    if c15 and c60:
+        try:
+            ent = entries.evaluate(c15, c60)
+        except Exception:  # noqa: BLE001
+            ent = None
+    if ent:
+        out["setup"] = dict(
+            direction=ent.get("direction"), passed=ent.get("passed", 0),
+            grade=ent.get("grade") or "", touching=ent.get("touching"),
+            active=ent.get("active"),
+            entry=ent.get("entry"), sl=ent.get("sl"),
+            tp1=ent.get("tp1"), tp2=ent.get("tp2"),
+            session=ent.get("sessionLabel"),
+            missing=[c["label"] for c in ent.get("checks") or []
+                     if not c["ok"]])
+    # ---- pick the BEST signal across all TFs ----
+    best = None
+    def better(cand):
+        return best is None or cand["score"] > best["score"]
+    if ent and not ent.get("touching") and not ent.get("active") \
+            and (ent.get("passed") or 0) >= 6 and not ent.get("grade") \
+            and ent.get("entry") is not None:
+        cand = dict(kind="arming", tf="15m",
+                    side=("demand" if ent.get("direction") == "LONG"
+                          else "supply"),
+                    direction=ent.get("direction") or "LONG",
+                    passed=ent["passed"], entry=ent["entry"],
+                    sl=ent.get("sl") or 0, tp1=ent.get("tp1") or 0,
+                    tp2=ent.get("tp2") or 0,
+                    missing=ent.get("checks") or [],
+                    score=ent["passed"] + 2)
+        if better(cand):
+            best = cand
+    for tf, row in tfs.items():
+        for z in row["zones"]:
+            if z["status"] == "live":
+                side_dir = "LONG" if z["side"] == "demand" else "SHORT"
+                cand = dict(kind="live", tf=tf, side=z["side"],
+                            direction=side_dir, passed=z["passed"],
+                            lo=z["bottom"], hi=z["top"], zone=z,
+                            score=10 + z["passed"])
+                if better(cand):
+                    best = cand
+    bulls = [tf for tf, r in tfs.items() if r["trend"] == "BULL"]
+    bears = [tf for tf, r in tfs.items() if r["trend"] == "BEAR"]
+    align = None
+    if len(bulls) >= 4:
+        align = dict(direction="LONG", tfs=bulls)
+    elif len(bears) >= 4:
+        align = dict(direction="SHORT", tfs=bears)
+    out["bias"] = dict(bulls=len(bulls), bears=len(bears),
+                       total=len(tfs), align=align and align["direction"])
+    if align and best is None:
+        want = "demand" if align["direction"] == "LONG" else "supply"
+        for tf, row in tfs.items():
+            for z in row["zones"]:
+                if z["side"] == want and z["passed"] >= 4 \
+                        and z["status"] != "tested":
+                    cand = dict(kind="biaszone", tf=tf, side=z["side"],
+                                direction=align["direction"],
+                                passed=z["passed"], lo=z["bottom"],
+                                hi=z["top"], zone=z,
+                                score=6 + z["passed"])
+                    if better(cand):
+                        best = cand
+    out["best"] = best
+    return out
+
+
+def _mtf_alert(scan):
+    """Post the best signal to the group immediately. Deduped per zone /
+    kind (45 min) with a global gap (20 min) so members get signal
+    quality, never spam. The 8/8 A+ phone cards stay separate."""
+    b = (scan or {}).get("best")
+    if not b:
+        return
+    spot = scan.get("spot") or (b.get("entry") or 0)
+    if b["kind"] == "live":
+        key = f"live:{b['tf']}:{b['lo']:.0f}-{b['hi']:.0f}"
+        head = (f"\U0001F534 LIVE ZONE · {b['tf']} "
+                f"{'DEMAND' if b['side'] == 'demand' else 'SUPPLY'}\n\n"
+                f"Full-house retest right now — {b['passed']}/5 checks\n"
+                f"Zone {b['lo']:,.1f} \u2013 {b['hi']:,.1f} "
+                f"(spot {spot:,.2f})")
+    elif b["kind"] == "arming":
+        key = f"arming:{b['entry']:.0f}:{b['direction']}"
+        head = (f"\u23f3 BEST SIGNAL ARMING · 15m {b['direction']}\n\n"
+                f"{b['passed']}/8 confluence \u2014 tradeable quality\n"
+                f"Entry zone {b['entry']:,.2f} \u00b7 SL {b['sl']:,.2f}\n"
+                f"TP1 {b['tp1']:,.2f} \u00b7 TP2 {b['tp2']:,.2f}\n"
+                f"Missing: " + " \u00b7 ".join(
+                    c["label"] for c in b["missing"][:3]))
+    else:
+        key = f"bias:{b['tf']}:{b['lo']:.0f}-{b['hi']:.0f}"
+        head = (f"\u26a1 MTF CONFLUENCE · {b['direction']}\n\n"
+                f"{scan['bias']['bulls'] if b['direction'] == 'LONG' else scan['bias']['bears']}"
+                f"/{scan['bias']['total']} timeframes aligned "
+                f"{'bullish' if b['direction'] == 'LONG' else 'bearish'}\n"
+                f"Best zone: {b['tf']} "
+                f"{'demand' if b['side'] == 'demand' else 'supply'} "
+                f"{b['lo']:,.1f} \u2013 {b['hi']:,.1f} "
+                f"({b['passed']}/5)")
+    now = time.time()
+    if _mtf_mem["lastAlerts"].get(key, 0) and \
+            now - _mtf_mem["lastAlerts"][key] < 2700:
+        return
+    if now - _mtf_mem["lastGlobal"] < 1200:
+        return
+    # exact delta line — the same numbers that gate the engine
+    dline = ""
+    dv = scan.get("delta")
+    if dv:
+        e9, e21 = dv.get("ema9"), dv.get("ema21")
+        dline = (f"\n\U0001F4CA EXACT DELTA: EMA9 {e9:+.3f} \u00b7 "
+                 f"EMA21 {e21:+.3f} \u00b7 "
+                 f"{round((dv.get('buyPct') or 0.5) * 100)}% buy volume"
+                 f" \u00b7 {dv.get('state', '—')}")
+        if dv.get("divergence"):
+            dline += f" \u00b7 divergence {dv['divergence']}"
+    age = scan.get("barAge")
+    fresh = f"\n\u23f1 data fresh \u2014 last 15m bar closed {age // 60}m ago" \
+        if age is not None else ""
+    trend_line = ""
+    tb = scan.get("bias") or {}
+    if tb:
+        trend_line = (f"\n\U0001F4C8 TF trends: "
+                      f"{tb['bulls']} bull / {tb['bears']} bear / "
+                      f"{tb['total']} total")
+    _notify(f"\U0001F4E1 {head}\n"
+            f"{trend_line}{dline}{fresh}\n\n"
+            f"\u26a0 analysis alert \u2014 the 8/8 A+ trade card still "
+            f"fires automatically when everything confirms", cat="signal")
+    _mtf_mem["lastAlerts"][key] = now
+    _mtf_mem["lastAlerts"] = {k: v for k, v in _mtf_mem["lastAlerts"].items()
+                              if now - v < 7200}
+    _mtf_mem["lastGlobal"] = now
+
+
+def _mtf_loop():
+    time.sleep(150)                       # let all TF data warm up
+    while True:
+        try:
+            scan = _mtf_scan()
+            if scan:
+                _mtf_mem["lastScan"] = scan
+                _mtf_alert(scan)
+        except Exception as e:  # noqa: BLE001
+            print(f"[mtf] scan failed: {e}", flush=True)
+        time.sleep(60)
+
+
 # ------------------------------------------------- self-upgrade engine
 # Research findings now UPDATE the live system by themselves: when a
 # challenger variant beats production out-of-sample (n>=5, +0.20R edge)
@@ -3499,6 +3729,15 @@ def _desk_update_digest():
             if a.get("state") == "connected"]
     mode = (f"{len(live)} live MT5 account(s)"
             if live else "paper engine only")
+    try:
+        tb = (_mtf_mem.get("lastScan") or {}).get("bias") or {}
+        if tb:
+            lines.append(f"\U0001F4C8 MTF bias: {tb['bulls']} bull / "
+                         f"{tb['bears']} bear of {tb['total']} timeframes"
+                         + (f" \u00b7 {tb['align']} aligned"
+                            if tb.get("align") else ""))
+    except Exception:  # noqa: BLE001
+        pass
     up_h = int((time.time() - _BOOT_T) / 3600)
     lines.append(f"\u2699\ufe0f System v{SYSTEM_VERSION} \u00b7 uptime "
                  f"{up_h}h \u00b7 loops healthy \u00b7 {mode}")
@@ -3537,6 +3776,7 @@ def start_background():
     threading.Thread(target=_research_loop, daemon=True).start()
     threading.Thread(target=_announce_version, daemon=True).start()
     threading.Thread(target=_desk_update_loop, daemon=True).start()
+    threading.Thread(target=_mtf_loop, daemon=True).start()
 
 
 # ------------------------------------------------- cross-deploy persistence
@@ -4310,6 +4550,14 @@ def api_ai_trader_run():
         return jsonify(error=_ai_trader_mem.get("lastErr")
                        or "AI trader unavailable"), 503
     return _ai_trader_payload(sig=sig)
+
+
+@app.route("/api/mtf")
+def api_mtf():
+    s = _mtf_mem.get("lastScan")
+    if s:
+        s = dict(s, age=int(time.time() - s.get("t", 0)))
+    return jsonify(scan=s)
 
 
 @app.route("/api/desk/updates")

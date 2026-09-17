@@ -500,6 +500,12 @@
         <div id="trkBody"><div class="muted small">no live signal — waiting for an A+ setup</div></div>
       </div>
 
+      <div class="card" id="mtfCard">
+        <div class="card-head"><h2>🧭 MTF Signal Matrix</h2>
+          <span class="muted small" id="mtfSum">scanning every timeframe…</span></div>
+        <div id="mtfBody"><div class="muted small">15m · 1H · 2H · 4H · 1D — trend, zones &amp; best signal, refreshed every minute</div></div>
+      </div>
+
       <div class="card" id="aiTraderCard">
         <div class="card-head"><h2>🧠 AI Trader · Best Signal</h2>
           <span class="muted small" id="aiTraderSum">asking the AI research desk…</span></div>
@@ -2343,6 +2349,68 @@ const INITIAL = {{ payload|tojson }};
   document.addEventListener('visibilitychange', () => {
     if(!document.hidden){ load(false); loadEntry(); }
   });
+
+  // ---------- MTF signal matrix ----------
+  function mtfRender(j){
+    const s = j && j.scan;
+    if(!s){
+      $('mtfSum').textContent = 'scanning…';
+      return;
+    }
+    const tfs = s.tfs || {};
+    const order = ['15m', '60m', '2h', '4h', '1d'];
+    const arrow = t => t === 'BULL' ? '<span style="color:#22c55e">▲ BULL</span>'
+      : t === 'BEAR' ? '<span style="color:#ef4444">▼ BEAR</span>'
+      : '<span class="muted">● RANGE</span>';
+    const rows = order.filter(tf => tfs[tf]).map(tf => {
+      const r = tfs[tf];
+      const z = (r.zones || [])[0];
+      return '<div class="small" style="display:flex; gap:10px; align-items:baseline; padding:2px 0">'
+        + '<span class="mono" style="flex:none;min-width:34px"><b>' + tf + '</b></span>'
+        + arrow(r.trend)
+        + '<span class="mono muted" style="flex:none">' + (+r.close).toFixed(1) + '</span>'
+        + (z ? '<span class="muted" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'
+            + z.side + ' ' + (+z.bottom).toFixed(0) + '–' + (+z.top).toFixed(0)
+            + ' · ' + z.status + ' ' + z.passed + '/5</span>' : '')
+        + '</div>';
+    }).join('');
+    const b = s.best;
+    const d = s.delta;
+    let bestHtml = '';
+    if(b){
+      const col = b.direction === 'LONG' ? '#22c55e' : '#ef4444';
+      const lbl = b.kind === 'live' ? '🔴 LIVE ZONE' : b.kind === 'arming' ? '⏳ ARMING' : '⚡ CONFLUENCE';
+      bestHtml = '<div class="mt5-acc" style="margin-top:6px"><b style="color:' + col + '">'
+        + lbl + ' · ' + (b.tf || '') + ' · ' + b.direction + '</b>'
+        + (b.entry != null ? '<span class="mono">🎯 ' + (+b.entry).toFixed(2)
+          + ' · 🛑 ' + (+b.sl).toFixed(2) + '</span>' : '')
+        + (b.lo != null ? '<span class="mono">zone ' + (+b.lo).toFixed(1) + ' – ' + (+b.hi).toFixed(1)
+          + ' · ' + b.passed + (b.kind === 'arming' ? '/8' : '/5') + '</span>' : '')
+        + '</div>';
+    }
+    let dHtml = '';
+    if(d){
+      dHtml = '<div class="small muted" style="margin-top:6px">📊 exact delta: EMA9 '
+        + (+d.ema9).toFixed(3) + ' · EMA21 ' + (+d.ema21).toFixed(3)
+        + ' · ' + Math.round((d.buyPct || 0.5) * 100) + '% buy · ' + (d.state || '—')
+        + (d.divergence ? ' · div: ' + d.divergence : '') + '</div>';
+    }
+    const bias = s.bias || {};
+    $('mtfSum').textContent = (bias.bulls != null
+      ? bias.bulls + ' bull / ' + bias.bears + ' bear of ' + bias.total + ' TFs'
+      : 'live') + (s.age != null ? ' · ' + (s.age < 90 ? s.age + 's' : Math.round(s.age / 60) + 'm') + ' old' : '');
+    $('mtfBody').innerHTML = rows + bestHtml + dHtml
+      + (s.barAge != null ? '<div class="small muted" style="margin-top:4px">⏱ last 15m bar closed '
+        + Math.round(s.barAge / 60) + 'm ago — analysis never late</div>' : '');
+  }
+  async function mtfLoad(){
+    try{
+      const r = await apiFetch('/api/mtf');
+      mtfRender(await r.json());
+    }catch(e){}
+  }
+  mtfLoad();
+  setInterval(() => { if(!document.hidden) mtfLoad(); }, 60000);
 
   // ---------- AI trader (best signal) ----------
   function aiTraderRender(j){

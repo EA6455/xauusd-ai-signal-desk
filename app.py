@@ -1049,6 +1049,21 @@ def _mt5_provision_thread(acc, tries=None):
     acc["tries"] = (acc.get("tries") or 0) + 1 if tries is None else tries
     try:
         if not acc.get("accountId"):       # retries reuse the created one
+            # reuse an existing bridge record for this login+server so
+            # retries never leave duplicate accounts upstream (free tier
+            # allows very few) — disconnect deletes the record, so a
+            # reuse only ever sees the same credentials
+            try:
+                for ex in _mt5_req("GET", "/users/current/accounts", tok,
+                                   prov=True):
+                    if (str(ex.get("login")) == str(acc["login"])
+                            and ex.get("server") == acc["server"]
+                            and ex.get("platform", "mt5") == "mt5"):
+                        acc["accountId"] = ex["_id"]
+                        break
+            except Exception:  # noqa: BLE001  list unavailable — create
+                pass
+        if not acc.get("accountId"):
             import uuid
             txn = uuid.uuid4().hex
             created = None
@@ -1075,6 +1090,21 @@ def _mt5_provision_thread(acc, tries=None):
             if not created or not created.get("id"):
                 raise RuntimeError("account creation returned no id")
             acc["accountId"] = created["id"]
+        # cloud terminals do NOT auto-deploy via REST — deploy explicitly
+        try:
+            _mt5_req("POST", f"/users/current/accounts/{acc['accountId']}"
+                             "/deploy", tok, prov=True)
+        except _Mt5Error as e:
+            s = str(e)
+            if "403" in s or "top up" in s:
+                acc["tries"] = 99          # billing wall — stop retrying
+                raise RuntimeError(
+                    "MetaApi cloud cannot deploy the live trading "
+                    "terminal on its free plan — activate the 7-day "
+                    "trial or subscribe at metaapi.cloud (once), then "
+                    "press Connect again. Paper trading still works.")
+            if "already deployed" not in s.lower():
+                raise
         # wait for the cloud terminal to connect to the broker
         last = None
         for i in range(90):                # up to ~7.5 minutes
@@ -1083,22 +1113,24 @@ def _mt5_provision_thread(acc, tries=None):
                 st = _mt5_req("GET", f"/users/current/accounts/"
                                      f"{acc['accountId']}", tok, prov=True)
                 last = st.get("connectionStatus")
-                if last == "CONNECTED":
-                    break
-                if last == "DISCONNECTED" and i > 12:
-                    raise RuntimeError(
-                        "broker rejected the connection — check the MT5 "
-                        "login, password and server name, then press "
-                        "Connect again")
-            except Exception as e:  # noqa: BLE001  timeout / transient
-                if isinstance(e, _Mt5Error) and "404" in str(e):
-                    acc.pop("accountId", None)   # stale upstream — re-create
+            except _Mt5Error as e:
+                if "404" in str(e):
+                    acc.pop("accountId", None)   # gone — re-create next try
                     raise RuntimeError("stale bridge account — will "
                                        "re-create")
                 continue
+            except Exception:  # noqa: BLE001  timeout / transient
+                continue
+            if last == "CONNECTED":
+                break
+            if last == "DISCONNECTED" and i > 12:
+                raise RuntimeError(
+                    "broker rejected the connection — check the MT5 "
+                    "login, password and server name, then press "
+                    "Connect again")
         if last != "CONNECTED":
             raise RuntimeError(f"terminal state: {last or 'unreachable'} "
-                               "after 7.5 min — will keep retrying")
+                               f"after 7.5 min — will keep retrying")
         _mt5_sync_acc(acc)
         acc["state"] = "connected"
         acc["err"] = None

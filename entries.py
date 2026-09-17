@@ -36,11 +36,15 @@ import numpy as np
 import ml
 
 MIN_CHECKS_TRIGGER = 8          # A+ (8/8) triggers; 7/8 = "arming", no alert
-TP1_R = 0.75                    # TP1 = 0.75× risk — half off, stop to BE
-TP2_R = 1.5                     # TP2 runner = 1.5× risk
-# high-win profile (backtested on 4522 x 15m bars): A+ win 42.9% -> 73.3%
-# with avgR +0.24 -> +0.31; momentum win 68% at +0.15R (SL 2.5×ATR)
-MAX_WAIT_BARS = 20              # setup resolves within 20 x 15m = 5 hours
+TP1_R = 1.0                     # TP1 = 1.0× risk — half off, stop to BE (1:2 profile)
+TP2_R = 2.0                     # TP2 runner = 2.0× risk
+# v2 profile (backtested, 4522 x 15m bars): 1:2 RR at TP1 1.0R/TP2 2.0R lifts
+# A+ to +0.50R avg (71% TP1) and the elite A+/B+ CONTINUATION cohort to 83%
+# win / +0.65R (n=12). Mid/deep-pullback B+/C+ zones lose money at 1:2
+# (42-44%) — those stay web-feed watch lines, not phone cards.
+MAX_WAIT_BARS = 96              # backtest resolve window: 24h (TP2 runner at
+                                # 2R needs room; matches the live tracker,
+                                # which follows every card to TP or SL)
 
 SWING_K = 3                     # fractal strength (bars each side)
 BASE_BARS = 3                   # max candles forming a zone base
@@ -581,6 +585,9 @@ ROT_MAX_WAIT = 3           # bars allowed to close back inside after the pierce
 ROT_PIERCE_ATR = 0.05      # min wick penetration beyond the daily level
 ROT_SL_BUF_ATR = 0.10      # stop buffer beyond the sweep wick
 ROT_RESOLVE_BARS = 96      # rotation resolves within 24h
+ROT_TP1_R = 0.75           # rotation keeps its OWN researched exit profile:
+ROT_TP2_R = 1.5            # 75% win at 0.75/1.5 — at the 1:2 profile it
+                           # drops to 56%, so it is NOT moved to 1:2
 # v1 (backtested, 60d of 15m): prior-day high = buyside liquidity, prior-day
 # low = sellside. Fading a FIRST-side sweep is a coin flip (48% TP1, only 29%
 # of runs ever reach the other side) — those stay web-feed watch lines. Once
@@ -590,7 +597,8 @@ ROT_RESOLVE_BARS = 96      # rotation resolves within 24h
 # wick; entering on a retest of the level instead was tested and is WORSE.
 
 
-def _rot_resolve(pack, i, d, entry, sl, tp1, tp2):
+def _rot_resolve(pack, i, d, entry, sl, tp1, tp2,
+                  tp1r=ROT_TP1_R, tp2r=ROT_TP2_R):
     """Honest outcome of a rotation trade: half off at TP1, stop to BE,
     runner to TP2. Same-bar SL+TP counts as a loss (conservative); a
     timeout marks the remaining half to market."""
@@ -610,14 +618,14 @@ def _rot_resolve(pack, i, d, entry, sl, tp1, tp2):
     if hit1 is None:
         r = d * (c[end] - entry) / risk
         return ("win" if r > 0 else "loss"), round(r, 2)
-    rem = 0.5 * TP1_R
+    rem = 0.5 * tp1r
     for m in range(hit1 + 1, end + 1):
         be = (ll[m] <= entry) if d == 1 else (hh[m] >= entry)
         hit2 = (hh[m] >= tp2) if d == 1 else (ll[m] <= tp2)
         if be:                      # same-bar BE+TP2 also counts as BE
             return "win", round(rem, 2)
         if hit2:
-            return "win", round(rem + 0.5 * TP2_R, 2)
+            return "win", round(rem + 0.5 * tp2r, 2)
     tail = 0.5 * max(0.0, d * (c[end] - entry) / risk)
     return "win", round(rem + tail, 2)
 
@@ -670,8 +678,8 @@ def scan_daily_rotations(candles):
                         sl = float(max(hh[i:j + 1])) + ROT_SL_BUF_ATR * atr[j]
                         risk = sl - entry
                         if risk > 0:
-                            tp1 = entry - TP1_R * risk
-                            tp2 = entry - TP2_R * risk
+                            tp1 = entry - ROT_TP1_R * risk
+                            tp2 = entry - ROT_TP2_R * risk
                             res, r = _rot_resolve(pack, j, -1, entry, sl,
                                                   tp1, tp2)
                             if res is not None:
@@ -707,8 +715,8 @@ def scan_daily_rotations(candles):
                         sl = float(min(ll[i:j + 1])) - ROT_SL_BUF_ATR * atr[j]
                         risk = entry - sl
                         if risk > 0:
-                            tp1 = entry + TP1_R * risk
-                            tp2 = entry + TP2_R * risk
+                            tp1 = entry + ROT_TP1_R * risk
+                            tp2 = entry + ROT_TP2_R * risk
                             res, r = _rot_resolve(pack, j, 1, entry, sl,
                                                   tp1, tp2)
                             if res is not None:
@@ -740,7 +748,8 @@ def rotation_view(e):
     hi_first = e["firstSide"] == "high"
     return dict(kind="rotation", grade=grade, direction=e["dir"],
                 entry=e["entry"], sl=e["sl"], tp1=e["tp1"], tp2=e["tp2"],
-                rr1=TP1_R, rr2=TP2_R, sweptSide=e["sweptSide"],
+                rr1=ROT_TP1_R, rr2=ROT_TP2_R,
+                sweptSide=e["sweptSide"],
                 sweptLevel=e["sweptLevel"], sweepExt=e["sweepExt"],
                 firstSide=e["firstSide"], firstLevel=e["firstLevel"],
                 firstT=ft_s, session=e.get("session"), barTime=e["t"],
@@ -845,6 +854,46 @@ def zone_radar(candles15, candles_1h=None, price=None, max_zones=9):
                 missing=[RADAR_MISS[k] for k, v in checks.items() if not v]))
     out.sort(key=lambda r: abs(r["dist"]))
     return out[:max_zones]
+
+
+def cohort_stats(candles15):
+    """Stats for the ELITE cohort — A+/B+ retests of CONTINUATION zones
+    (entry in the direction-extreme 38% of the causal dealing range).
+    Backtest: 83% win · +0.65R at the 1:2 profile (n=12, 60d). These are
+    the only B+ setups that earn a phone card."""
+    if not candles15 or len(candles15) < 200:
+        return None
+    key = f"elite:{len(candles15)}:{candles15[-1]['t']}"
+    if _stats_cache.get("ekey") == key:
+        return _stats_cache["estats"]
+    setups, pack = _scan_setups(candles15)
+    hh, ll = pack["h"], pack["l"]
+    sel = []
+    for s in setups:
+        if s["grade"] not in ("A+", "B+"):
+            continue
+        d = 1 if s["dir"] == "LONG" else -1
+        i = s["i"]
+        r_hi = r_lo = None
+        for idx in reversed(pack["sw_hi_idx"]):
+            if idx + SWING_K <= i:
+                r_hi = float(hh[idx]); break
+        for idx in reversed(pack["sw_lo_idx"]):
+            if idx + SWING_K <= i:
+                r_lo = float(ll[idx]); break
+        if r_hi is None or r_lo is None or r_hi <= r_lo:
+            continue
+        p = (s["entry"] - r_lo) / (r_hi - r_lo)
+        if (p >= 0.62) if d == 1 else (p <= 0.38):
+            sel.append(s)
+    w = sum(1 for s in sel if s["outcome"] == "win")
+    r_sum = sum(s["r"] or 0.0 for s in sel)
+    stats = dict(setups=len(sel), wins=w,
+                 winRate=round(w / len(sel), 3) if sel else None,
+                 avgR=round(r_sum / len(sel), 3) if sel else None)
+    _stats_cache["ekey"] = key
+    _stats_cache["estats"] = stats
+    return stats
 
 
 def backtest_stats(candles15, min_grade="A+"):

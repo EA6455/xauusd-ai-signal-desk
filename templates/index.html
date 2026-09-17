@@ -461,6 +461,12 @@
       </div>
 
       <div class="card">
+        <div class="card-head"><h2>🌊 Market Delta</h2><span class="muted small" id="deltaState"></span></div>
+        <canvas id="deltaChart" height="72" style="width:100%; display:block"></canvas>
+        <div id="deltaMeta" class="small muted" style="margin-top:4px">loading order flow…</div>
+      </div>
+
+      <div class="card">
         <div class="card-head"><h2>Price Alerts</h2></div>
         <div class="pa-form">
           <input id="paInput" type="number" step="0.1" placeholder="Alert me at price… e.g. 4350.0">
@@ -888,6 +894,60 @@ const INITIAL = {{ payload|tojson }};
     body.innerHTML = h;
   }
 
+  // ---------- market delta (smoothed order flow) ----------
+  function renderDelta(){
+    const d = state.data && state.data.delta;
+    const cv = $('deltaChart'), meta = $('deltaMeta'), st = $('deltaState');
+    if(!d || !d.series || !d.series.length){
+      st.textContent = '';
+      meta.textContent = 'order flow unavailable';
+      return;
+    }
+    const w = cv.width = cv.clientWidth || 300, h = cv.height = 72;
+    const g = cv.getContext('2d');
+    g.clearRect(0, 0, w, h);
+    const s = d.series, n = s.length, mid = h / 2;
+    // zero line
+    g.strokeStyle = 'rgba(148,163,184,.25)'; g.beginPath();
+    g.moveTo(0, mid); g.lineTo(w, mid); g.stroke();
+    // smoothed delta area (green above zero, red below)
+    const x = i => 2 + i * (w - 4) / (n - 1);
+    const y = v => mid - v * (mid - 4);
+    for(const [sign, col] of [[1, '38,211,111'], [-1, '245,73,61']]){
+      g.beginPath();
+      g.moveTo(x(0), mid);
+      let started = false;
+      for(let i = 0; i < n; i++){
+        const v = s[i];
+        if(sign === 1 ? v > 0 : v < 0){
+          if(!started){ g.moveTo(x(i), mid); started = true; }
+          g.lineTo(x(i), y(v));
+        } else if(started){
+          g.lineTo(x(i), mid); started = false;
+        }
+      }
+      if(started) g.lineTo(x(n - 1), mid);
+      g.closePath();
+      g.fillStyle = 'rgba(' + col + ',.28)'; g.fill();
+      g.strokeStyle = 'rgba(' + col + ',.9)'; g.lineWidth = 1.4; g.stroke();
+    }
+    // current dot
+    const last = s[n - 1];
+    g.beginPath();
+    g.arc(x(n - 1), y(last), 2.6, 0, 7);
+    g.fillStyle = last >= 0 ? 'var(--green)' : 'var(--red)'; g.fill();
+    const bull = d.ema9 >= 0;
+    st.textContent = d.state;
+    st.style.color = d.state.indexOf('BUYERS') === 0 ? 'var(--green)'
+      : d.state.indexOf('SELLERS') === 0 ? 'var(--red)' : 'var(--amber)';
+    meta.innerHTML = 'smooth pressure EMA9 ' + (d.ema9 >= 0 ? '+' : '') + d.ema9 +
+      ' · trend EMA21 ' + (d.ema21 >= 0 ? '+' : '') + d.ema21 +
+      ' · buy share ' + Math.round((d.buyPct || 0.5) * 100) + '%' +
+      ' · cum Δ ' + (d.cum >= 0 ? '+' : '') + Math.round(d.cum) +
+      (d.divergence ? ' · <b style="color:var(--amber)">⚠ ' + d.divergence + '</b>' : '') +
+      ' · <span style="opacity:.7">vol-weighted · close-position-in-range</span>';
+  }
+
   // ---------- zone radar ----------
   function renderRadar(){
     const body = $('radarBody');
@@ -927,10 +987,12 @@ const INITIAL = {{ payload|tojson }};
     const long = e.direction === 'LONG';
     $('entryCard').className = 'card' + (e.active ? (long ? ' glow-long' : ' glow-short') : '');
     if(e.active){
-      st.textContent = e.grade + (e.htf ? ' HTF' : '') + ' ' + e.direction + ' RETEST';
+      st.textContent = e.grade + (e.htf ? ' HTF' : '') + ' ' + e.direction + ' RETEST' +
+        (e.contZone && (e.grade === 'A+' || e.grade === 'B+') ? ' · 🔥' : '');
       st.className = 'grade ' + (long ? 'long' : 'short');
     } else if(e.grade === 'B+' || e.grade === 'C+'){
-      st.textContent = e.grade + ' ' + e.direction + ' SETUP';
+      st.textContent = e.grade + ' ' + e.direction + ' SETUP' +
+        (e.contZone && e.grade === 'B+' ? ' · 🔥' : '');
       st.className = 'grade ' + (e.grade === 'B+' ? 'bplus' : 'cplus');
     } else {
       st.textContent = (e.zoneSide ? 'ARMING · ' + e.passed + '/8' : 'WAITING · ' + e.passed + '/8');
@@ -1297,7 +1359,7 @@ const INITIAL = {{ payload|tojson }};
         '-bar hit rate: ' + (hr.wins / hr.total * 100).toFixed(0) + '% (' + hr.wins + '/' + hr.total + ')'
       : 'No historical signal flips in the loaded window.';
 
-    renderNote(); renderDesk(); renderTracker(); renderAlerts(); renderPa(); renderFundamentals(); renderRadar(); renderSweep(); renderRotation();
+    renderNote(); renderDesk(); renderTracker(); renderAlerts(); renderPa(); renderFundamentals(); renderRadar(); renderSweep(); renderRotation(); renderDelta();
     if(d.entry){ renderEntry(); }
     drawChart(P0());
   }

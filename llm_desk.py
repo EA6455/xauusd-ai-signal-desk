@@ -50,39 +50,42 @@ def _post(url, headers, body, timeout=25):
         return json.loads(r.read().decode())
 
 
-def _call_openai(key, model, user_txt):
+def _call_openai(key, model, user_txt, sys_txt=None):
     j = _post("https://api.openai.com/v1/chat/completions",
               {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
               dict(model=model, max_tokens=220, temperature=0.3,
-                   messages=[dict(role="system", content=PROMPT_SYS),
+                   messages=[dict(role="system",
+                               content=sys_txt or PROMPT_SYS),
                              dict(role="user", content=user_txt)]))
     return j["choices"][0]["message"]["content"]
 
 
-def _call_groq(key, model, user_txt):
+def _call_groq(key, model, user_txt, sys_txt=None):
     # Groq speaks the OpenAI schema
     j = _post("https://api.groq.com/openai/v1/chat/completions",
               {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
               dict(model=model, max_tokens=220, temperature=0.3,
-                   messages=[dict(role="system", content=PROMPT_SYS),
+                   messages=[dict(role="system",
+                               content=sys_txt or PROMPT_SYS),
                              dict(role="user", content=user_txt)]))
     return j["choices"][0]["message"]["content"]
 
 
-def _call_anthropic(key, model, user_txt):
+def _call_anthropic(key, model, user_txt, sys_txt=None):
     j = _post("https://api.anthropic.com/v1/messages",
               {"x-api-key": key, "anthropic-version": "2023-06-01",
                "Content-Type": "application/json"},
-              dict(model=model, max_tokens=220, system=PROMPT_SYS,
+              dict(model=model, max_tokens=220,
+                   system=sys_txt or PROMPT_SYS,
                    messages=[dict(role="user", content=user_txt)]))
     return j["content"][0]["text"]
 
 
-def _call_gemini(key, model, user_txt):
+def _call_gemini(key, model, user_txt, sys_txt=None):
     j = _post(
         f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
         {"Content-Type": "application/json", "x-goog-api-key": key},
-        dict(system_instruction=dict(parts=[dict(text=PROMPT_SYS)]),
+        dict(system_instruction=dict(parts=[dict(text=sys_txt or PROMPT_SYS)]),
              contents=[dict(parts=[dict(text=user_txt)])],
              generationConfig=dict(maxOutputTokens=220, temperature=0.3)))
     return j["candidates"][0]["content"]["parts"][0]["text"]

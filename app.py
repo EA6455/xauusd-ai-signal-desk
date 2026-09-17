@@ -1872,6 +1872,18 @@ def _research_status():
         lines.append(f"📊 next full digest in {nxt} min")
     else:
         lines.append("📊 first digest posting with first scan")
+    intel = r.get("intel") or {}
+    if intel.get("headlines"):
+        lines.append(f"🌐 outside intel: "
+                     f"{intel['headlines'][0][:60]}")
+    else:
+        lines.append("🌐 outside intel: scanning news feeds")
+    llmst = (r.get("llm") or {}).get("state")
+    if llmst == "active":
+        lines.append(f"🧠 LLM researcher: "
+                     f"{(r.get('llm') or {}).get('model', 'AI')} · active")
+    else:
+        lines.append("🧠 LLM researcher: add OPENAI_API_KEY to activate")
     lines.append(f"🌂 {time.strftime('%H:%M:%S', time.gmtime(now))}"
                  " UTC · this status updates live every 30s")
     txt = "\n".join(lines)
@@ -1891,6 +1903,146 @@ def _research_status():
         with STATE_LOCK:
             STATE["research"] = r
             _save_state()
+
+
+INTEL_SCAN_S = 900          # outside-intel self-research every 15 min
+LLM_RESEARCH_S = 7200       # external-AI research analysis every 2 h
+
+
+def _research_intel():
+    """Self-directed OUTSIDE research: what the world is doing to gold —
+    fresh headlines (with the engine's own bullish/bearish read), the
+    high-impact event calendar, and the macro backdrop. Posts a report to
+    the DEVELOP topic when there is NEW material; always refreshes the
+    intel cache that feeds the live status message. Runs 24/7."""
+    try:
+        news = fundamentals.google_news(limit=10)
+    except Exception:  # noqa: BLE001
+        news = []
+    fresh = [(ts, t, s) for ts, t, s in (news or [])
+             if fundamentals.gold_relevant(t)][:6]
+    try:
+        evs = fundamentals.upcoming(hours=24, impacts=("High",))
+    except Exception:  # noqa: BLE001
+        evs = []
+    try:
+        mac = fundamentals.macro_snapshot() or {}
+    except Exception:  # noqa: BLE001
+        mac = {}
+    now = int(time.time())
+    r = STATE.get("research") or {}
+    intel = r.get("intel") or {}
+    posted = intel.get("posted") or []
+    new = [(ts, t, s) for ts, t, s in fresh
+           if t.strip().lower() not in posted]
+    intel.update(t=now, posted=(posted + [t.strip().lower()
+                                          for _ts, t, _s in new])[-40:],
+                 headlines=[t for _ts, t, _s in fresh],
+                 events=[dict(title=e.get("title"), minutesTo=e.get("minutesTo"),
+                              country=e.get("country")) for e in evs[:3]],
+                 dxy=(mac.get("dxy") or {}).get("price"),
+                 us10y=(mac.get("us10y") or {}).get("price"))
+    r["intel"] = intel
+    r["lastIntelT"] = now
+    with STATE_LOCK:
+        STATE["research"] = r
+        _save_state()
+    if not new:
+        return False
+    lines = [f"\U0001F310 OUTSIDE INTEL \u00b7 self-researched \u00b7 "
+             f"{time.strftime('%H:%M', time.gmtime(now))} UTC", ""]
+    for _ts, t, _s in new[:4]:
+        b = fundamentals.gold_bias(t)
+        ic = {"BULLISH": "\U0001F7E2", "BEARISH": "\U0001F534",
+              "MIXED": "\U0001F7E1"}[b["bias"]]
+        lines.append(f"{ic} {t[:110]}")
+    if evs:
+        lines += ["", "\U0001F4C5 next high-impact:"]
+        for e in evs[:3]:
+            mn = e.get("minutesTo")
+            when = f"{mn//60}h{mn%60:02d}m" if mn and mn >= 60 else f"{mn}m"
+            lines.append(f"\u2022 {e.get('title')} ({e.get('country')}) "
+                         f"in {when}")
+    dxy = intel.get("dxy"); us10y = intel.get("us10y")
+    if dxy or us10y:
+        m = []
+        if dxy:
+            m.append(f"DXY {dxy:.2f}")
+        if us10y:
+            m.append(f"US10Y {us10y:.2f}%")
+        lines += ["", "\U0001F4B5 macro: " + " \u00b7 ".join(m) +
+                  " (dollar/yields up = headwind for gold)"]
+    lines += ["", "\U0001F9EA research note: outside info feeds the "
+              "backtest context \u2014 full analysis in the hourly digest"]
+    _notify("\n".join(lines), cat="develop")
+    return True
+
+
+def _llm_researcher():
+    """External AI researcher (OpenAI / Anthropic / Gemini / Groq): reads
+    the research table + outside intel and posts its own analysis to the
+    DEVELOP topic. Auto-activates the moment a provider key exists in the
+    environment (set OPENAI_API_KEY etc.); without a key it reports that
+    in the live status message. Runs every 2 hours, 24/7."""
+    import llm_desk
+    conf = llm_desk.configured()
+    now = int(time.time())
+    r = STATE.get("research") or {}
+    if not conf:
+        r["llm"] = dict(state="no-key", lastT=now)
+        with STATE_LOCK:
+            STATE["research"] = r
+            _save_state()
+        return False
+    k = conf[0]
+    p = llm_desk.PROVIDERS[k]
+    key = os.environ.get(p["key_env"])
+    model = os.environ.get(p["model_env"]) or p["model"]
+    res = r.get("last") or {}
+    intel = r.get("intel") or {}
+
+    def _fr(st):
+        if not st or not st.get("n"):
+            return "n=0"
+        return f"{st['n']} trades, {round((st['win'] or 0) * 100)}% win, {st['avgR']:+.2f}R"
+
+    prod = res.get("production") or {}
+    brief = [
+        "GOLD (XAUUSD) 15m SNR strategy research brief.",
+        f"Production (delta-confirmed, 1:2 RR, 1000-pip cap): window {_fr(prod.get('full'))}, "
+        f"out-of-sample {_fr(prod.get('oos'))}.",
+        "Challengers (window | out-of-sample):",
+    ]
+    for v in res.get("variants", []):
+        brief.append(f"- {v['name']}: {_fr(v.get('full'))} | {_fr(v.get('oos'))}")
+    if intel.get("headlines"):
+        brief.append("Latest outside headlines: " + "; ".join(
+            intel["headlines"][:4]))
+    if intel.get("events"):
+        brief.append("Upcoming high-impact events: " + "; ".join(
+            f"{e['title']} in {e['minutesTo']}m" for e in intel["events"]))
+    if intel.get("dxy") or intel.get("us10y"):
+        brief.append(f"Macro: DXY {intel.get('dxy')}, US10Y {intel.get('us10y')}")
+    sys_txt = ("You are the always-on research desk of a quantitative gold "
+               "(XAUUSD) SNR trading system. Analyze the brief and reply "
+               "with compact plain text, max 120 words, three short labeled "
+               "lines: MATTER: what matters most for the strategy now; "
+               "IDEA: one concrete backtest idea to test next; RISK: one "
+               "risk to watch. No markdown, no JSON.")
+    try:
+        txt = llm_desk._CALLS[k](key, model, "\n".join(brief), sys_txt)
+    except TypeError:  # older provider signature without sys prompt
+        txt = llm_desk._CALLS[k](key, model, "\n".join(brief))
+    txt = (txt or "").strip()[:900]
+    if not txt:
+        return False
+    _notify(f"\U0001F9E0 LLM RESEARCHER \u00b7 {p['name']}\n\n{txt}",
+            cat="develop")
+    r["llm"] = dict(state="active", provider=k, model=model, lastT=now)
+    with STATE_LOCK:
+        STATE["research"] = r
+        _save_state()
+    return True
 
 
 def research_cycle(force=False):
@@ -1919,6 +2071,11 @@ def _research_loop():
                     if time.time() - r.get("lastDigestT", 0) \
                             >= RESEARCH_DIGEST_S:
                         _research_digest(r, res)
+            if time.time() - r.get("lastIntelT", 0) >= INTEL_SCAN_S:
+                _research_intel()
+            if time.time() - (r.get("llm") or {}).get("lastT", 0) \
+                    >= LLM_RESEARCH_S:
+                _llm_researcher()
             _research_status()
         except Exception:  # noqa: BLE001
             import traceback

@@ -372,33 +372,37 @@ if array.size(hiIdx) > 0
             array.remove(hiBot, i)
 
 // ---- scoreboard: this chart's own evidence ---------------------------------------------
+// (overwrite-only pattern: cells are simply re-set on every update —
+//  clearing/merging operations are avoided on purpose: they raise a
+//  runtime error when the chart re-executes the last bar)
 var table tb = na
-if showScoreboard
+if showScoreboard and barstate.islast
     if na(tb)
         posMap = posOpt == "Top Right" ? position.top_right : posOpt == "Top Left" ? position.top_left : posOpt == "Bottom Right" ? position.bottom_right : position.bottom_left
         tb := table.new(posMap, 3, 7, bgcolor = color.new(#0a0e17, 15), border_width = 1, border_color = color.new(color.gray, 72))
-    if barstate.islast
-        table.clear(tb, 0, 0, 2, 6)
-        table.cell(tb, 0, 0, "PROOF · THIS CHART'S OWN HISTORY", text_color = color.new(color.white, 8), text_size = size.small, bgcolor = color.new(color.gray, 62))
-        table.merge_cells(tb, 0, 0, 2, 0)
-        table.cell(tb, 0, 1, "1st touch (FRESH)", text_color = color.new(color.white, 25), text_size = size.tiny)
-        table.cell(tb, 1, 1, f_pct(array.get(statsW, 0), array.get(statsN, 0)), text_color = color.new(color.green, 10), text_size = size.tiny)
-        table.cell(tb, 2, 1, "n=" + str.tostring(array.get(statsN, 0)) + f_lowN(array.get(statsN, 0)), text_color = color.new(color.gray, 30), text_size = size.tiny)
-        table.cell(tb, 0, 2, "2nd touch", text_color = color.new(color.white, 25), text_size = size.tiny)
-        table.cell(tb, 1, 2, f_pct(array.get(statsW, 1), array.get(statsN, 1)), text_color = color.new(color.white, 20), text_size = size.tiny)
-        table.cell(tb, 2, 2, "n=" + str.tostring(array.get(statsN, 1)), text_color = color.new(color.gray, 30), text_size = size.tiny)
-        table.cell(tb, 0, 3, "3rd+ touch", text_color = color.new(color.white, 25), text_size = size.tiny)
-        table.cell(tb, 1, 3, f_pct(array.get(statsW, 2), array.get(statsN, 2)), text_color = color.new(color.gray, 15), text_size = size.tiny)
-        table.cell(tb, 2, 3, "n=" + str.tostring(array.get(statsN, 2)), text_color = color.new(color.gray, 30), text_size = size.tiny)
-        table.cell(tb, 0, 4, "raw pivot levels", text_color = color.new(color.gray, 20), text_size = size.tiny)
-        table.cell(tb, 1, 4, f_pct(bW, bN), text_color = color.new(color.gray, 10), text_size = size.tiny)
-        table.cell(tb, 2, 4, "n=" + str.tostring(bN), text_color = color.new(color.gray, 30), text_size = size.tiny)
-        edgeTxt = "—"
-        if array.get(statsN, 0) > 0 and bN > 0
-            d = int(math.round(100.0 * array.get(statsW, 0) / array.get(statsN, 0) - 100.0 * bW / bN))
-            edgeTxt := (d >= 0 ? "+" : "") + str.tostring(d) + " pts"
-        table.cell(tb, 0, 5, "edge (1st vs raw)", text_color = color.new(color.white, 25), text_size = size.tiny)
-        table.cell(tb, 1, 5, edgeTxt, text_color = edgeTxt == "—" or str.contains(edgeTxt, "-") ? color.new(color.gray, 15) : color.new(color.green, 10), text_size = size.tiny)
-        table.cell(tb, 2, 5, "", text_size = size.tiny)
-        table.cell(tb, 0, 6, "bounce = " + str.tostring(bounceR, "#.##") + " ATR before break · " + str.tostring(evalWindow) + " bars · closed bars only · timeouts excluded: " + str.tostring(exclN), text_color = color.new(color.gray, 35), text_size = size.tiny)
-        table.merge_cells(tb, 0, 6, 2, 6)
+    hdr = color.new(color.gray, 62)
+    table.cell(tb, 0, 0, "PROOF", text_color = color.new(color.white, 8), text_size = size.small, bgcolor = hdr)
+    table.cell(tb, 1, 0, "this chart's own history", text_color = color.new(color.white, 8), text_size = size.small, bgcolor = hdr)
+    table.cell(tb, 2, 0, "", text_size = size.small, bgcolor = hdr)
+    table.cell(tb, 0, 1, "1st touch (FRESH)", text_color = color.new(color.white, 25), text_size = size.tiny)
+    table.cell(tb, 1, 1, f_pct(array.get(statsW, 0), array.get(statsN, 0)), text_color = color.new(color.green, 10), text_size = size.tiny)
+    table.cell(tb, 2, 1, "n=" + str.tostring(array.get(statsN, 0)) + f_lowN(array.get(statsN, 0)), text_color = color.new(color.gray, 30), text_size = size.tiny)
+    table.cell(tb, 0, 2, "2nd touch", text_color = color.new(color.white, 25), text_size = size.tiny)
+    table.cell(tb, 1, 2, f_pct(array.get(statsW, 1), array.get(statsN, 1)), text_color = color.new(color.white, 20), text_size = size.tiny)
+    table.cell(tb, 2, 2, "n=" + str.tostring(array.get(statsN, 1)), text_color = color.new(color.gray, 30), text_size = size.tiny)
+    table.cell(tb, 0, 3, "3rd+ touch", text_color = color.new(color.white, 25), text_size = size.tiny)
+    table.cell(tb, 1, 3, f_pct(array.get(statsW, 2), array.get(statsN, 2)), text_color = color.new(color.gray, 15), text_size = size.tiny)
+    table.cell(tb, 2, 3, "n=" + str.tostring(array.get(statsN, 2)), text_color = color.new(color.gray, 30), text_size = size.tiny)
+    table.cell(tb, 0, 4, "raw pivot levels", text_color = color.new(color.gray, 20), text_size = size.tiny)
+    table.cell(tb, 1, 4, f_pct(bW, bN), text_color = color.new(color.gray, 10), text_size = size.tiny)
+    table.cell(tb, 2, 4, "n=" + str.tostring(bN), text_color = color.new(color.gray, 30), text_size = size.tiny)
+    edgeTxt = "—"
+    if array.get(statsN, 0) > 0 and bN > 0
+        d = int(math.round(100.0 * array.get(statsW, 0) / array.get(statsN, 0) - 100.0 * bW / bN))
+        edgeTxt := (d >= 0 ? "+" : "") + str.tostring(d) + " pts"
+    table.cell(tb, 0, 5, "edge (1st vs raw)", text_color = color.new(color.white, 25), text_size = size.tiny)
+    table.cell(tb, 1, 5, edgeTxt, text_color = edgeTxt == "—" or str.contains(edgeTxt, "-") ? color.new(color.gray, 15) : color.new(color.green, 10), text_size = size.tiny)
+    table.cell(tb, 2, 5, "", text_size = size.tiny)
+    table.cell(tb, 0, 6, "bounce " + str.tostring(bounceR, "#.##") + " ATR", text_color = color.new(color.gray, 35), text_size = size.tiny)
+    table.cell(tb, 1, 6, str.tostring(evalWindow) + " bars", text_color = color.new(color.gray, 35), text_size = size.tiny)
+    table.cell(tb, 2, 6, "closed bars · excl " + str.tostring(exclN), text_color = color.new(color.gray, 35), text_size = size.tiny)

@@ -78,8 +78,16 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "10.16"
+SYSTEM_VERSION = "10.17"
 SYSTEM_CHANGELOG = {
+    "10.17": [
+        "PROOF indicator fix: the scoreboard no longer merges table "
+        "cells \u2014 the merge operation raised a runtime error when the "
+        "chart re-executed its last bar on any update. Now uses a safe "
+        "overwrite pattern; measurements and labels unchanged. Members "
+        "who saw an error: re-copy PROOF (website 1-click or the fixed "
+        "parts in the INDICATOR topic)",
+    ],
     "10.16": [
         "FOURTH TradingView indicator: PROOF [Self-Proving Zones] \u2014 "
         "the first indicator that proves itself. Every zone label carries "

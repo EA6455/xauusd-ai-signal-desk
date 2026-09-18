@@ -78,8 +78,14 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "10.3"
+SYSTEM_VERSION = "10.4"
 SYSTEM_CHANGELOG = {
+    "10.4": [
+        "The TradingView indicator source now posts itself to the "
+        "group's INDICATOR [TRADING VIEW] topic — members get the "
+        "latest A+ only Pine Script with install instructions, "
+        "automatically, every time a TradingView-related update ships",
+    ],
     "10.3": [
         "TradingView companion indicator: the full SNR engine (zones, "
         "structure, 0.75:1.5 levels) as a Pine Script you paste into "
@@ -266,7 +272,7 @@ TG_TOPIC_FILE = os.path.join(BASE, "telegram_topics.json")
 # shipped) still overrides, and tg_topic_detect() still re-learns if a
 # topic ever goes away.
 DEFAULT_TG_TOPICS = {"signal": 59, "news": 60, "develop": 164,
-                     "complete": True}
+                     "indicator": 787, "complete": True}
 _TG_TOPICS = None
 
 
@@ -4221,6 +4227,67 @@ _desk_mem = dict(lastVersionPost=None, lastDigestPost=None)
 DESK_UPDATE_S = 6 * 3600      # member digest cadence
 
 
+def _announce_indicator():
+    """Post the CURRENT TradingView indicator source to the INDICATOR
+    topic in the member group, split into copy-paste-friendly parts
+    with install instructions. Runs whenever a released version's
+    changelog mentions TradingView — members always get the latest
+    source where they expect it."""
+    if not _desk_speaker():
+        return 0
+    tid = _tg_topics().get("indicator")
+    if not tid:
+        return 0
+    try:
+        with open(os.path.join(app.root_path, "static",
+                               "xauusd_snr.pine")) as f:
+            pine = f.read()
+    except Exception:  # noqa: BLE001
+        return 0
+    if not pine.strip():
+        return 0
+    _tg_post_topic(
+        "\U0001F4CB XAUUSD SNR DESK \u00b7 TradingView INDICATOR (A+ only)\n\n"
+        "The desk's exact SNR engine for your TradingView chart:\n"
+        "\u2022 zones, structure, 8-check grading \u2014 signals only at A+ (8/8)\n"
+        "\u2022 SELL signals included (engine sees both sides)\n"
+        "\u2022 levels: half off at TP1 0.75R, stop to breakeven, runner 1.5R\n\n"
+        "HOW TO INSTALL (2 minutes):\n"
+        "1. TradingView \u2192 XAUUSD \u2192 15-minute chart\n"
+        "2. Pine Editor (bottom bar) \u2192 paste ALL parts below in order\n"
+        "3. Save \u2192 Add to chart\n"
+        "4. Alerts \u2192 Condition: this indicator \u2192 'A+ BUY setup' / "
+        "'A+ SELL setup'\n\n"
+        f"Source below in parts \u2014 paste them as ONE script.", tid)
+    parts, buf, size = [], [], 0
+    for line in pine.split("\n"):
+        if size + len(line) + 1 > 3000 and buf:
+            parts.append("\n".join(buf))
+            buf, size = [], 0
+        buf.append(line)
+        size += len(line) + 1
+    if buf:
+        parts.append("\n".join(buf))
+    sent = 0
+    for i, p in enumerate(parts, 1):
+        if _tg_post_topic(f"\U0001F4DC SOURCE \u2014 part {i}/{len(parts)}\n"
+                          f"\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\n{p}", tid):
+            sent += 1
+            time.sleep(1.2)               # Telegram rate courtesy
+    _tg_post_topic(
+        "\u2705 That's the whole script. Questions or a red error in the "
+        "Pine Editor? Message the group \u2014 the desk fixes it.\n"
+        "Not financial advice. Signals are also posted here as cards with "
+        "the same levels.", tid)
+    with STATE_LOCK:
+        STATE["lastIndicatorPost"] = dict(t=int(time.time()),
+                                          parts=len(parts), sent=sent)
+        _save_state()
+    print(f"[desk] posted indicator source to INDICATOR topic "
+          f"({sent}/{len(parts)} parts)", flush=True)
+    return sent
+
+
 def _announce_version():
     """On boot: if this software version was never announced, tell the
     members in DEVELOP what changed — the system informs the group by
@@ -4246,6 +4313,10 @@ def _announce_version():
         _desk_mem["lastVersionPost"] = int(time.time())
         print(f"[desk] announced v{SYSTEM_VERSION} to DEVELOP",
               flush=True)
+        if "TradingView" in " ".join(
+                SYSTEM_CHANGELOG.get(SYSTEM_VERSION) or []):
+            threading.Thread(target=_announce_indicator,
+                             daemon=True).start()
     except Exception as e:  # noqa: BLE001
         print(f"[desk] version announce failed: {e}", flush=True)
 
@@ -5383,6 +5454,7 @@ def api_desk_updates():
                    announced=STATE.get("sysVer") == SYSTEM_VERSION,
                    lastVersionPost=_desk_mem["lastVersionPost"],
                    lastDigestPost=_desk_mem["lastDigestPost"],
+                   lastIndicatorPost=STATE.get("lastIndicatorPost"),
                    changelog=SYSTEM_CHANGELOG.get(SYSTEM_VERSION) or [])
 
 

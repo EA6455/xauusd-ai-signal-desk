@@ -41,6 +41,7 @@ _lock = threading.Lock()
 _event = threading.Condition()
 _feeds = {}           # name -> {bid, ask, t, lastPx, lastT, ticks}
 _hist = deque(maxlen=7200)          # (epoch, merged mid) — ~2h of tape
+_changes = deque(maxlen=1200)       # epochs of actual mid VALUE changes
 _mid = {"v": None, "t": 0.0}        # merged mid at its last update
 _started = False
 
@@ -93,6 +94,8 @@ def _apply(name, bid=None, ask=None, last=None):
         f["ticks"].append(now)
         m = _merged_locked(now)
         if m is not None:
+            if _mid["v"] is None or abs(m - _mid["v"]) >= 0.005:
+                _changes.append(now)      # the displayed price moved
             _mid.update(v=m, t=now)
             _hist.append((now, m))
     with _event:
@@ -159,6 +162,7 @@ def stats():
                 if f["bid"] and f["ask"] else None)
         out["merged"] = dict(
             ticksPerMin=total,
+            changesPerMin=sum(1 for t in _changes if now - t < 60),
             lastAge=round(now - _mid["t"], 1) if _mid["t"] else None,
             mid=_mid["v"] and round(_mid["v"], 2))
         return out

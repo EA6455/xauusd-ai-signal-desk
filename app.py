@@ -3784,6 +3784,8 @@ def _price_engine():
     while True:
         try:
             _tick_spot_raw(0.0)             # recompute + refresh _tick_mem
+            _price_engine_on["n"] = _price_engine_on.get("n", 0) + 1
+            _price_engine_on["t"] = time.time()
         except Exception:  # noqa: BLE001
             pass
         time.sleep(0.25)
@@ -4590,7 +4592,15 @@ def api_ai_trader_run():
 
 @app.route("/api/feed")
 def api_feed():
-    return jsonify(feeds=wsfeed.stats())
+    e = _price_engine_on
+    return jsonify(feeds=wsfeed.stats(),
+                   engine=dict(running=bool(e.get("on")),
+                               hz=round(e.get("n", 0) / max(
+                                   1e-9, time.time() - _BOOT_T), 2),
+                               lastAgo=round(time.time() - e["t"], 1)
+                               if e.get("t") else None,
+                               tickAge=round(time.time() - _tick_mem["t"], 1)
+                               if _tick_mem.get("t") else None))
 
 
 @app.route("/api/mtf")

@@ -78,8 +78,13 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "2.9.5"
+SYSTEM_VERSION = "2.9.6"
 SYSTEM_CHANGELOG = {
+    "2.9.6": [
+        "While TradingView's feed is reachable it carries the price level "
+        "100% (futures leg demoted to fallback) — the displayed number "
+        "locks to the TV level and moves at tape speed",
+    ],
     "2.9.5": [
         "ONE price space: the MTF matrix card and the AI trader brief now "
         "use the same spot-aligned candles as the chart — every level on "
@@ -1871,7 +1876,7 @@ def _tick_spot_raw(max_age=0.8):
             tv_fresh = (_tv_spot_mem["price"] is not None
                          and now - _tv_spot_mem["t"] < 30)
             if tv_fresh:
-                w_f = 0.25          # TV level (in ema) is the truth
+                w_f = 0.0           # TV IS the level; futures only as fallback
             elif ga_age <= 20:
                 w_f = 0.40
             elif ga_age <= 45:

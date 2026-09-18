@@ -1,0 +1,375 @@
+//@version=5
+// ============================================================================
+//  XAUUSD SNR DESK  —  TradingView companion indicator (desk v10.3)
+//  Ports the signal desk's SNR engine so members see the SAME zones,
+//  structure, grades and levels on TradingView charts.
+//
+//  Engine logic (15m XAUUSD recommended):
+//    · swings         fractal pivots, 3 bars each side
+//    · structure      HH+HL = bull / LH+LL = bear, from last two swings
+//    · zones          base of the swing that caused a strong impulse
+//                     (>= 1.8x ATR within 48 bars), height <= 2x ATR
+//    · origin         the impulse must break the prior opposing swing (BOS)
+//    · fresh          untested since the impulse completed
+//    · confirm        engulfing or rejection-pin candle back inside
+//    · 1H trend       EMA9 vs EMA21 on COMPLETED hourly bars
+//    · session        dead hours (21:00-01:00 UTC) filtered
+//    · grade          A+ ONLY — 8/8 checks or no signal (no B+/C+)
+//    · exit profile   half off at TP1 0.75R, stop to BE, runner 1.5R
+//
+//  Set alerts on "A+ BUY setup" / "A+ SELL setup".
+//  Not financial advice — the desk scores every signal honestly at
+//  render-trading-chart-desk.onrender.com
+// ============================================================================
+indicator("XAUUSD SNR Desk [v10]", overlay = true,
+     max_boxes_count = 500, max_labels_count = 500, max_lines_count = 100)
+
+// ---- inputs ----------------------------------------------------------------
+kSwing  = input.int(3,     "Swing strength (bars each side)", minval = 2, maxval = 10)
+impAtr  = input.float(1.8, "Impulse: min ATR multiple",       minval = 0.5, step = 0.1)
+zoneAtr = input.float(2.0, "Max zone height (ATR)",           minval = 0.5, step = 0.1)
+slBuf   = input.float(0.15, "Stop buffer beyond zone (ATR)",  minval = 0.0, step = 0.05)
+tp1R    = input.float(0.75, "TP1 (R) — half off",             minval = 0.1, step = 0.05)
+tp2R    = input.float(1.5,  "TP2 (R) — runner",               minval = 0.2, step = 0.05)
+showZones = input.bool(true, "Draw zones")
+showSess  = input.bool(true, "Shade dead session (21:00-01:00 UTC)")
+showDash  = input.bool(true, "Show check dashboard")
+
+// ---- basics ------------------------------------------------------------------
+atr = ta.atr(14)
+hr  = hour(time, "UTC")
+sessDead  = hr >= 21 or hr < 1
+sessName  = hr < 1 ? "dead" : hr < 7 ? "asia" : hr < 12 ? "london" : hr < 16 ? "ny-overlap" : "ny-late"
+
+// 1H trend from COMPLETED hourly bars (non-repainting request pattern)
+[hE9, hE21, hC] = request.security(syminfo.tickerid, "60",
+     [ta.ema(close, 9)[1], ta.ema(close, 21)[1], close[1]],
+     lookahead = barmerge.lookahead_on)
+var int hourBars = 0
+if ta.change(time("60")) != 0
+    hourBars += 1
+htf = hourBars < 25 ? 0 : hE9 > hE21 and hC > hE21 ? 1 : hE9 < hE21 and hC < hE21 ? -1 : 0
+
+// ---- swings ------------------------------------------------------------------
+ph = ta.pivothigh(high, kSwing, kSwing)
+pl = ta.pivotlow(low,  kSwing, kSwing)
+
+// storage for unpaired swing lows (demand side) / highs (supply side)
+var loIdx = array.new_int(0)
+var loVal = array.new_float(0)
+var loAtr = array.new_float(0)
+var loTop = array.new_float(0)
+var loBot = array.new_float(0)
+var loPriorHi = array.new_float(0)
+var hiIdx = array.new_int(0)
+var hiVal = array.new_float(0)
+var hiAtr = array.new_float(0)
+var hiTop = array.new_float(0)
+var hiBot = array.new_float(0)
+var hiPriorLo = array.new_float(0)
+
+// structure trackers: two newest confirmed swings per side
+var int   h1i = -1
+var float h1v = na
+var int   h2i = -1
+var float h2v = na
+var int   l1i = -1
+var float l1v = na
+var int   l2i = -1
+var float l2v = na
+var int   structNow = 0
+var bool  bosNow = false
+
+// live zones (parallel arrays)
+var zTop = array.new_float(0)
+var zBot = array.new_float(0)
+var zSide = array.new_int(0)       // +1 demand, -1 supply
+var zCaused = array.new_bool(0)
+var zTested = array.new_bool(0)
+var zFTBar = array.new_int(0)      // first-touch bar
+var zSignaled = array.new_bool(0)
+var zCreated = array.new_int(0)
+var zBox = array.new_box(0)
+var sigLbls = array.new_label(0)
+
+// dashboard state (last evaluated touch)
+var string dashGrade = ""
+var string dashDir = ""
+var int dashPassed = 0
+var float dashE = na
+var float dashS = na
+var float dashT1 = na
+var float dashT2 = na
+var bool c1l = false
+var bool c2l = false
+var bool c3l = false
+var bool c4l = false
+var bool c5l = false
+var bool c6l = false
+var bool c7l = false
+var bool c8l = false
+
+// ---- confirmation candle (engulfing or rejection pin) ------------------------
+f_confirm(d) =>
+    ok = false
+    if bar_index >= 1
+        body = math.abs(close - open)
+        rng = high - low
+        if rng > 0
+            if d == 1
+                eng = close > open and open <= close[1] and close >= open[1] and close > close[1] and body > math.abs(close[1] - open[1])
+                pin = (math.min(open, close) - low) >= 1.8 * body and close >= low + 0.6 * rng
+                ok := eng or pin
+            else
+                eng = close < open and open >= close[1] and close <= open[1] and close < close[1] and body > math.abs(close[1] - open[1])
+                pin = (high - math.max(open, close)) >= 1.8 * body and close <= high - 0.6 * rng
+                ok := eng or pin
+    ok
+
+// ---- pivot processing ---------------------------------------------------------
+if not na(ph) and bar_index > kSwing + 2
+    pi = bar_index - kSwing
+    // update structure trackers
+    h2i := h1i
+    h2v := h1v
+    h1i := pi
+    h1v := ph
+    // store this swing high for future supply pairing
+    bTop = math.max(high[kSwing], math.max(high[kSwing + 1], high[kSwing + 2]))
+    bBot = math.min(low[kSwing],  math.min(low[kSwing + 1],  low[kSwing + 2]))
+    array.push(hiIdx, pi)
+    array.push(hiVal, ph)
+    array.push(hiAtr, atr[kSwing])
+    array.push(hiTop, bTop)
+    array.push(hiBot, bBot)
+    array.push(hiPriorLo, l1v)
+    // pair every unpaired swing LOW with this, its first following high
+    if array.size(loIdx) > 0
+        for i = array.size(loIdx) - 1 to 0
+            sIdx = array.get(loIdx, i)
+            sVal = array.get(loVal, i)
+            sAtr = array.get(loAtr, i)
+            sTop = array.get(loTop, i)
+            sBot = array.get(loBot, i)
+            sPriorHi = array.get(loPriorHi, i)
+            impulse = ph - sVal
+            if pi - sIdx <= 48 and impulse >= impAtr * sAtr and sTop > sBot and sTop - sBot <= zoneAtr * sAtr
+                caused = not na(sPriorHi) ? ph > sPriorHi : false
+                dup = false
+                if array.size(zTop) > 0
+                    for zi = 0 to array.size(zTop) - 1
+                        if array.get(zSide, zi) == 1 and bar_index - array.get(zCreated, zi) <= 24 and not (sBot > array.get(zTop, zi) or sTop < array.get(zBot, zi))
+                            dup := true
+                            break
+                if not dup
+                    array.push(zTop, sTop)
+                    array.push(zBot, sBot)
+                    array.push(zSide, 1)
+                    array.push(zCaused, caused)
+                    array.push(zTested, false)
+                    array.push(zFTBar, -1)
+                    array.push(zSignaled, false)
+                    array.push(zCreated, bar_index)
+                    array.push(zBox, showZones ? box.new(sIdx, sTop, bar_index + 6, sBot, border_color = color.new(color.green, 35), bgcolor = color.new(color.green, 84), border_width = 1) : box(na))
+            // this low is now paired (first following high = this one)
+            array.remove(loIdx, i)
+            array.remove(loVal, i)
+            array.remove(loAtr, i)
+            array.remove(loTop, i)
+            array.remove(loBot, i)
+            array.remove(loPriorHi, i)
+
+if not na(pl) and bar_index > kSwing + 2
+    pi = bar_index - kSwing
+    l2i := l1i
+    l2v := l1v
+    l1i := pi
+    l1v := pl
+    bTop = math.max(high[kSwing], math.max(high[kSwing + 1], high[kSwing + 2]))
+    bBot = math.min(low[kSwing],  math.min(low[kSwing + 1],  low[kSwing + 2]))
+    array.push(loIdx, pi)
+    array.push(loVal, pl)
+    array.push(loAtr, atr[kSwing])
+    array.push(loTop, bTop)
+    array.push(loBot, bBot)
+    array.push(loPriorHi, h1v)
+    // pair every unpaired swing HIGH with this, its first following low
+    if array.size(hiIdx) > 0
+        for i = array.size(hiIdx) - 1 to 0
+            sIdx = array.get(hiIdx, i)
+            sVal = array.get(hiVal, i)
+            sAtr = array.get(hiAtr, i)
+            sTop = array.get(hiTop, i)
+            sBot = array.get(hiBot, i)
+            sPriorLo = array.get(hiPriorLo, i)
+            impulse = sVal - pl
+            if pi - sIdx <= 48 and impulse >= impAtr * sAtr and sTop > sBot and sTop - sBot <= zoneAtr * sAtr
+                caused = not na(sPriorLo) ? pl < sPriorLo : false
+                dup = false
+                if array.size(zTop) > 0
+                    for zi = 0 to array.size(zTop) - 1
+                        if array.get(zSide, zi) == -1 and bar_index - array.get(zCreated, zi) <= 24 and not (sBot > array.get(zTop, zi) or sTop < array.get(zBot, zi))
+                            dup := true
+                            break
+                if not dup
+                    array.push(zTop, sTop)
+                    array.push(zBot, sBot)
+                    array.push(zSide, -1)
+                    array.push(zCaused, caused)
+                    array.push(zTested, false)
+                    array.push(zFTBar, -1)
+                    array.push(zSignaled, false)
+                    array.push(zCreated, bar_index)
+                    array.push(zBox, showZones ? box.new(sIdx, sTop, bar_index + 6, sBot, border_color = color.new(color.red, 35), bgcolor = color.new(color.red, 84), border_width = 1) : box(na))
+            array.remove(hiIdx, i)
+            array.remove(hiVal, i)
+            array.remove(hiAtr, i)
+            array.remove(hiTop, i)
+            array.remove(hiBot, i)
+            array.remove(hiPriorLo, i)
+
+// structure state after updates
+if h1i >= 0 and h2i >= 0 and l1i >= 0 and l2i >= 0
+    hh = h1v > h2v
+    hl = l1v > l2v
+    lh = h1v < h2v
+    ll = l1v < l2v
+    structNow := hh and hl ? 1 : lh and ll ? -1 : 0
+    bosNow := structNow == 1 ? (bar_index - h1i) <= 40 : structNow == -1 ? (bar_index - l1i) <= 40 : false
+
+// ---- zone maintenance: breaks, touches, grading ------------------------------
+bool aPlusBuy = false
+bool aPlusSell = false
+if array.size(zTop) > 0
+    for zi = array.size(zTop) - 1 to 0
+        s = array.get(zSide, zi)
+        zt = array.get(zTop, zi)
+        zb = array.get(zBot, zi)
+        old = bar_index - array.get(zCreated, zi)
+        broken = s == 1 ? low < zb - slBuf * atr : high > zt + slBuf * atr
+        if broken or old > 500
+            box.delete(array.get(zBox, zi))
+            array.remove(zTop, zi)
+            array.remove(zBot, zi)
+            array.remove(zSide, zi)
+            array.remove(zCaused, zi)
+            array.remove(zTested, zi)
+            array.remove(zFTBar, zi)
+            array.remove(zSignaled, zi)
+            array.remove(zCreated, zi)
+            array.remove(zBox, zi)
+        else
+            if not na(array.get(zBox, zi))
+                box.set_right(array.get(zBox, zi), bar_index + 6)
+            touching = s == 1 ? (low <= zt and close >= zb) : (high >= zb and close <= zt)
+            if touching
+                firstTouch = not array.get(zTested, zi)
+                if firstTouch
+                    array.set(zTested, zi, true)
+                    array.set(zFTBar, zi, bar_index)
+                inWindow = bar_index - array.get(zFTBar, zi) <= 6
+                d = s
+                c1 = structNow == d
+                c2 = bosNow
+                c3 = array.get(zCaused, zi)
+                c4 = firstTouch
+                c5 = true
+                c6 = f_confirm(d)
+                c7 = htf == d
+                c8 = not sessDead
+                c1l := c1
+                c2l := c2
+                c3l := c3
+                c4l := c4
+                c5l := c5
+                c6l := c6
+                c7l := c7
+                c8l := c8
+                passed = (c1 ? 1 : 0) + (c2 ? 1 : 0) + (c3 ? 1 : 0) + (c4 ? 1 : 0) + (c5 ? 1 : 0) + (c6 ? 1 : 0) + (c7 ? 1 : 0) + (c8 ? 1 : 0)
+                dashPassed := passed
+                dashGrade := passed >= 8 ? "A+" : ""
+                dashDir := d == 1 ? "BUY" : "SELL"
+                // A+ ONLY: 8/8 checks or nothing — B+/C+ never signal
+                if inWindow and not array.get(zSignaled, zi) and c6 and passed >= 8
+                    array.set(zSignaled, zi, true)
+                    entryP = close
+                    slP = d == 1 ? zb - slBuf * atr : zt + slBuf * atr
+                    risk = math.abs(entryP - slP)
+                    tp1P = entryP + d * tp1R * risk
+                    tp2P = entryP + d * tp2R * risk
+                    dashE := entryP
+                    dashS := slP
+                    dashT1 := tp1P
+                    dashT2 := tp2P
+                    col = d == 1 ? color.new(color.green, 10) : color.new(color.red, 10)
+                    txt = "A+ " + (d == 1 ? "BUY" : "SELL") + "\nE " + str.tostring(entryP, "#.##") + "\nSL " + str.tostring(slP, "#.##") + "\nTP1 " + str.tostring(tp1P, "#.##") + "\nTP2 " + str.tostring(tp2P, "#.##")
+                    array.push(sigLbls, label.new(bar_index, d == 1 ? low : high, txt, style = d == 1 ? label.style_label_up : label.style_label_down, color = col, textcolor = color.white, size = size.small))
+                    if array.size(sigLbls) > 40
+                        label.delete(array.get(sigLbls, 0))
+                        array.remove(sigLbls, 0)
+                    if dashGrade == "A+"
+                        if d == 1
+                            aPlusBuy := true
+                        else
+                            aPlusSell := true
+
+// ---- pruning of unpaired pivots ----------------------------------------------
+if array.size(loIdx) > 0
+    for i = array.size(loIdx) - 1 to 0
+        if bar_index - array.get(loIdx, i) > 200
+            array.remove(loIdx, i)
+            array.remove(loVal, i)
+            array.remove(loAtr, i)
+            array.remove(loTop, i)
+            array.remove(loBot, i)
+            array.remove(loPriorHi, i)
+if array.size(hiIdx) > 0
+    for i = array.size(hiIdx) - 1 to 0
+        if bar_index - array.get(hiIdx, i) > 200
+            array.remove(hiIdx, i)
+            array.remove(hiVal, i)
+            array.remove(hiAtr, i)
+            array.remove(hiTop, i)
+            array.remove(hiBot, i)
+            array.remove(hiPriorLo, i)
+
+// ---- plots, shading, dashboard -------------------------------------------------
+plotshape(aPlusBuy,  style = shape.triangleup,   location = location.belowbar, color = color.new(color.green, 0), size = size.small, title = "A+ BUY")
+plotshape(aPlusSell, style = shape.triangledown, location = location.abovebar, color = color.new(color.red, 0),   size = size.small, title = "A+ SELL")
+bgcolor(showSess and sessDead ? color.new(color.gray, 94) : na)
+
+f_ok(c) =>
+    c ? "✓" : "✗"
+
+var table dash = table.new(position.top_right, 2, 12, bgcolor = color.new(#0b0f17, 25), border_width = 1, border_color = color.new(color.gray, 70))
+if showDash and barstate.islast
+    gcol = dashGrade == "A+" ? color.new(color.green, 0) : color.new(color.gray, 0)
+    table.cell(dash, 0, 0, "SNR DESK", text_color = color.new(color.orange, 0), text_size = size.small)
+    table.cell(dash, 1, 0, dashGrade == "A+" ? "A+ " + dashDir : "scanning " + str.tostring(dashPassed) + "/8 · " + sessName, text_color = gcol, text_size = size.small)
+    table.cell(dash, 0, 1, "Structure", text_color = color.new(color.silver, 0), text_size = size.tiny)
+    table.cell(dash, 1, 1, f_ok(c1l), text_color = c1l ? color.new(color.green, 0) : color.new(color.red, 0), text_size = size.tiny)
+    table.cell(dash, 0, 2, "BOS recent", text_color = color.new(color.silver, 0), text_size = size.tiny)
+    table.cell(dash, 1, 2, f_ok(c2l), text_color = c2l ? color.new(color.green, 0) : color.new(color.red, 0), text_size = size.tiny)
+    table.cell(dash, 0, 3, "Origin zone", text_color = color.new(color.silver, 0), text_size = size.tiny)
+    table.cell(dash, 1, 3, f_ok(c3l), text_color = c3l ? color.new(color.green, 0) : color.new(color.red, 0), text_size = size.tiny)
+    table.cell(dash, 0, 4, "Fresh zone", text_color = color.new(color.silver, 0), text_size = size.tiny)
+    table.cell(dash, 1, 4, f_ok(c4l), text_color = c4l ? color.new(color.green, 0) : color.new(color.red, 0), text_size = size.tiny)
+    table.cell(dash, 0, 5, "Retest in zone", text_color = color.new(color.silver, 0), text_size = size.tiny)
+    table.cell(dash, 1, 5, f_ok(c5l), text_color = c5l ? color.new(color.green, 0) : color.new(color.red, 0), text_size = size.tiny)
+    table.cell(dash, 0, 6, "Confirm candle", text_color = color.new(color.silver, 0), text_size = size.tiny)
+    table.cell(dash, 1, 6, f_ok(c6l), text_color = c6l ? color.new(color.green, 0) : color.new(color.red, 0), text_size = size.tiny)
+    table.cell(dash, 0, 7, "1H trend EMA9/21", text_color = color.new(color.silver, 0), text_size = size.tiny)
+    table.cell(dash, 1, 7, f_ok(c7l), text_color = c7l ? color.new(color.green, 0) : color.new(color.red, 0), text_size = size.tiny)
+    table.cell(dash, 0, 8, "Live session", text_color = color.new(color.silver, 0), text_size = size.tiny)
+    table.cell(dash, 1, 8, f_ok(c8l), text_color = c8l ? color.new(color.green, 0) : color.new(color.red, 0), text_size = size.tiny)
+    table.cell(dash, 0, 9, "1H trend", text_color = color.new(color.silver, 0), text_size = size.tiny)
+    table.cell(dash, 1, 9, htf == 1 ? "BULL" : htf == -1 ? "BEAR" : "flat", text_color = htf == 1 ? color.new(color.green, 0) : htf == -1 ? color.new(color.red, 0) : color.new(color.gray, 0), text_size = size.tiny)
+    table.cell(dash, 0, 10, "Session", text_color = color.new(color.silver, 0), text_size = size.tiny)
+    table.cell(dash, 1, 10, sessName, text_color = sessDead ? color.new(color.red, 0) : color.new(color.green, 0), text_size = size.tiny)
+    if dashGrade != ""
+        table.cell(dash, 0, 11, "Levels", text_color = color.new(color.silver, 0), text_size = size.tiny)
+        table.cell(dash, 1, 11, "E " + str.tostring(dashE, "#.##") + " · SL " + str.tostring(dashS, "#.##") + " · TP " + str.tostring(dashT1, "#.##") + "/" + str.tostring(dashT2, "#.##"), text_color = color.new(color.white, 0), text_size = size.tiny)
+
+// ---- alerts --------------------------------------------------------------------
+alertcondition(aPlusBuy,  "A+ BUY setup",  "XAUUSD SNR Desk: A+ BUY setup confirmed — check the desk for the full card")
+alertcondition(aPlusSell, "A+ SELL setup", "XAUUSD SNR Desk: A+ SELL setup confirmed — check the desk for the full card")

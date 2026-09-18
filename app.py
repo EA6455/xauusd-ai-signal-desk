@@ -78,8 +78,18 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "10.2"
+SYSTEM_VERSION = "10.3"
 SYSTEM_CHANGELOG = {
+    "10.3": [
+        "TradingView companion indicator: the full SNR engine (zones, "
+        "structure, 0.75:1.5 levels) as a Pine Script you paste into "
+        "TradingView — served at /pine with a button on the SNR card. "
+        "A+ ONLY on-chart: signals and labels fire at 8/8 checks, never "
+        "B+/C+ (the losing cohorts), with a live x/8 progress readout. "
+        "Also fixed a supply-zone sign bug that had silently disabled "
+        "ALL sell-side setups; the engine now sees both sides of the "
+        "market — the short side backtests at 62% win / +0.24R",
+    ],
     "10.2": [
         "Strategy update — exit profile promoted to 0.75:1.5 (from 1:2): "
         "two independent studies agree the tighter first target wins more "
@@ -5277,6 +5287,19 @@ def _ai_trader_payload(sig=None):
                    trades=(STATE.get("aiTrades") or [])[:8],
                    stats=_ai_trader_stats(),
                    council=_ai_council_stats())
+
+
+@app.route("/pine")
+def pine_indicator():
+    """The desk's SNR engine as a TradingView Pine indicator — members
+    paste it into TV's Pine Editor to see the same zones and grades."""
+    try:
+        with open(os.path.join(app.root_path, "static",
+                               "xauusd_snr.pine")) as f:
+            txt = f.read()
+        return Response(txt, mimetype="text/plain")
+    except Exception:  # noqa: BLE001
+        return Response("-- indicator file missing --", mimetype="text/plain")
 
 
 @app.route("/api/ai/forecast")

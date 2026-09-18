@@ -78,8 +78,14 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "2.9.3"
+SYSTEM_VERSION = "2.9.4"
 SYSTEM_CHANGELOG = {
+    "2.9.4": [
+        "Prices now MATCH TradingView: the level anchors to TradingView's "
+        "own spot feed (OANDA:XAUUSD via their public scanner, polled "
+        "every 6s) with gold-api as backup — chart candles re-aligned to "
+        "the same spot level; live delta vs TV visible in /api/feed",
+    ],
     "2.9.3": [
         "Consolidated-index pricing: median of venue levels + the fastest "
         "feed's live motion — the displayed price now moves at tape speed "
@@ -1596,8 +1602,69 @@ def check_price_alerts(prev, new):
         _notify("⏰ " + a["msg"])
 
 
+_tv_spot_mem = {"price": None, "t": 0.0, "n": 0}
+
+TV_SPOT_TFS = ["OANDA:XAUUSD", "FOREXCOM:XAUUSD"]
+
+
+def _tv_spot():
+    """Level truth straight from TradingView's own public scanner — the
+    exact number their XAUUSD chart shows (OANDA spot). Cached; the
+    dedicated poller refreshes it every few seconds."""
+    now = time.time()
+    if _tv_spot_mem["price"] and now - _tv_spot_mem["t"] < 4:
+        return _tv_spot_mem["price"]
+    import urllib.request
+    try:
+        body = json.dumps({
+            "symbols": {"tickers": TV_SPOT_TFS, "query": {"types": []}},
+            "columns": ["close"]}).encode()
+        req = urllib.request.Request(
+            "https://scanner.tradingview.com/global/scan", data=body,
+            headers={"Content-Type": "application/json",
+                     "User-Agent": "Mozilla/5.0",
+                     "Origin": "https://www.tradingview.com",
+                     "Referer": "https://www.tradingview.com/"})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            j = json.load(r)
+        closes = [row["d"][0] for row in j.get("data") or []
+                  if isinstance(row.get("d"), list) and row["d"]
+                  and isinstance(row["d"][0], (int, float))]
+        if closes:
+            closes.sort()
+            _tv_spot_mem.update(price=closes[len(closes) // 2], t=now,
+                                n=_tv_spot_mem.get("n", 0) + 1)
+    except Exception:  # noqa: BLE001  — scanner briefly unavailable
+        pass
+    return _tv_spot_mem["price"]
+
+
+def _tv_spot_loop():
+    """Keep the TradingView level fresh (every 6s — one gentle request,
+    the same endpoint their website uses)."""
+    while True:
+        try:
+            _tv_spot()
+        except Exception:  # noqa: BLE001
+            pass
+        time.sleep(6)
+
+
 def spot_reference():
-    """Best available spot XAU/USD: gold-api.com, else OKX PAXG ticker."""
+    """Best available spot XAU/USD: TradingView's own feed first (the
+    reference users compare against), then gold-api.com, else OKX."""
+    tv = _tv_spot_mem["price"]
+    if tv and time.time() - _tv_spot_mem["t"] < 45:
+        return tv, "tradingview"
+    s = data.get_spot(max_age=30)
+    if s:
+        return s["price"], "gold-api.com"
+    try:
+        j = data._http_json("https://www.okx.com/api/v5/market/ticker?instId="
+                            + data.OKX_INSTRUMENT, timeout=8)
+        return float(j["data"][0]["last"]), "OKX PAXG"
+    except Exception:  # noqa: BLE001
+        return None, None
     s = data.get_spot(max_age=30)
     if s:
         return s["price"], "gold-api.com"
@@ -1732,6 +1799,16 @@ def _tick_spot_raw(max_age=0.8):
     #    follows the live book instead of trailing the slow spot feed.
     wm, _wt = wsfeed.mid(max_age=30)
     if wm:
+        # ---- sample T: TradingView level (the reference users compare
+        #      against) — freshest truth, fast-locked
+        tvp, tvt = _tv_spot_mem["price"], _tv_spot_mem["t"]
+        if tvp and now - tvt < 30:
+            fs_tv = tvp - wm
+            if abs(fs_tv) <= 8.0:
+                prev = _anchor_mem.get("ema")
+                ema = fs_tv if prev is None else prev + 0.5 * (fs_tv - prev)
+                _anchor_mem.update(ema=ema, warm=max(
+                    _anchor_mem.get("warm", 0), 99), last_ts=tvt)
         # ---- sample A: timestamp-matched gold-api premium (level truth, slow)
         matched_ts = None
         anchor_target = None
@@ -1786,7 +1863,11 @@ def _tick_spot_raw(max_age=0.8):
                     ga_age = now - _ts
             # the fresher the spot print, the more it IS the market;
             # as it ages the instant futures level carries the movement
-            if ga_age <= 20:
+            tv_fresh = (_tv_spot_mem["price"] is not None
+                         and now - _tv_spot_mem["t"] < 30)
+            if tv_fresh:
+                w_f = 0.25          # TV level (in ema) is the truth
+            elif ga_age <= 20:
                 w_f = 0.40
             elif ga_age <= 45:
                 w_f = 0.60
@@ -3820,6 +3901,7 @@ def start_background():
     if not _price_engine_on["on"]:
         _price_engine_on["on"] = True
         threading.Thread(target=_price_engine, daemon=True).start()
+    threading.Thread(target=_tv_spot_loop, daemon=True).start()
 
 
 # ------------------------------------------------- cross-deploy persistence
@@ -4599,7 +4681,13 @@ def api_ai_trader_run():
 @app.route("/api/feed")
 def api_feed():
     e = _price_engine_on
+    tv = _tv_spot_mem["price"]
+    disp = _tick_mem.get("price")
     return jsonify(feeds=wsfeed.stats(),
+                   tv=dict(price=tv, age=round(time.time() - _tv_spot_mem["t"], 1)
+                           if _tv_spot_mem["t"] else None,
+                           delta=round(disp - tv, 2)
+                           if (tv and disp) else None),
                    engine=dict(running=bool(e.get("on")),
                                hz=round(e.get("n", 0) / max(
                                    1e-9, time.time() - _BOOT_T), 2),

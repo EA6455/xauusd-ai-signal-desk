@@ -102,6 +102,7 @@ var zFTBar = array.new_int(0)      // first-touch bar
 var zSignaled = array.new_bool(0)
 var zCreated = array.new_int(0)
 var zBox = array.new_box(0)
+var zTouches = array.new_int(0)      // zone health: 0 fresh, 1 tested, 2+ weak
 var sigLbls = array.new_label(0)
 // per-trade drawings (capped — oldest deleted)
 var tEntry = array.new_line(0)
@@ -189,7 +190,8 @@ if not na(ph) and bar_index > kSwing + 2
                     array.push(zFTBar, -1)
                     array.push(zSignaled, false)
                     array.push(zCreated, bar_index)
-                    array.push(zBox, showZones ? box.new(sIdx, sTop, bar_index + 6, sBot, border_color = color.new(color.green, 35), bgcolor = color.new(color.green, 84), border_width = 1) : box(na))
+                    array.push(zTouches, 0)
+                    array.push(zBox, showZones ? box.new(sIdx, sTop, bar_index + 6, sBot, border_color = color.new(color.green, 35), bgcolor = color.new(color.green, 84), border_width = 1, text = "FRESH", text_color = color.new(color.green, 10), text_size = size.tiny) : box(na))
             // this low is now paired (first following high = this one)
             array.remove(loIdx, i)
             array.remove(loVal, i)
@@ -239,7 +241,8 @@ if not na(pl) and bar_index > kSwing + 2
                     array.push(zFTBar, -1)
                     array.push(zSignaled, false)
                     array.push(zCreated, bar_index)
-                    array.push(zBox, showZones ? box.new(sIdx, sTop, bar_index + 6, sBot, border_color = color.new(color.red, 35), bgcolor = color.new(color.red, 84), border_width = 1) : box(na))
+                    array.push(zTouches, 0)
+                    array.push(zBox, showZones ? box.new(sIdx, sTop, bar_index + 6, sBot, border_color = color.new(color.red, 35), bgcolor = color.new(color.red, 84), border_width = 1, text = "FRESH", text_color = color.new(color.red, 10), text_size = size.tiny) : box(na))
             array.remove(hiIdx, i)
             array.remove(hiVal, i)
             array.remove(hiAtr, i)
@@ -275,6 +278,7 @@ if array.size(zTop) > 0
             array.remove(zSide, zi)
             array.remove(zCaused, zi)
             array.remove(zTested, zi)
+            array.remove(zTouches, zi)
             array.remove(zFTBar, zi)
             array.remove(zSignaled, zi)
             array.remove(zCreated, zi)
@@ -285,9 +289,25 @@ if array.size(zTop) > 0
             touching = s == 1 ? (low <= zt and close >= zb) : (high >= zb and close <= zt)
             if touching
                 firstTouch = not array.get(zTested, zi)
+                tN = array.get(zTouches, zi) + 1
+                array.set(zTouches, zi, tN)
                 if firstTouch
                     array.set(zTested, zi, true)
                     array.set(zFTBar, zi, bar_index)
+                // ---- ZONE HEALTH: degrade the box as it gets consumed
+                bxh = array.get(zBox, zi)
+                if not na(bxh)
+                    zc = s == 1 ? color.green : color.red
+                    if tN == 1
+                        box.set_text(bxh, "TESTED")
+                        box.set_text_color(bxh, color.new(zc, 25))
+                        box.set_border_style(bxh, line.style_dashed)
+                        box.set_bgcolor(bxh, color.new(zc, 92))
+                    else
+                        box.set_text(bxh, "WEAK")
+                        box.set_text_color(bxh, color.new(color.gray, 15))
+                        box.set_border_color(bxh, color.new(color.gray, 45))
+                        box.set_bgcolor(bxh, color.new(zc, 95))
                 inWindow = bar_index - array.get(zFTBar, zi) <= 6
                 d = s
                 c1 = structNow == d
@@ -391,7 +411,7 @@ bgcolor(showSess and sessDead ? color.new(color.gray, 94) : na)
 f_ok(c) =>
     c ? "✓" : "✗"
 
-var table dash = table.new(position.top_right, 2, 12, bgcolor = color.new(#0b0f17, 25), border_width = 1, border_color = color.new(color.gray, 70))
+var table dash = table.new(position.top_right, 2, 13, bgcolor = color.new(#0b0f17, 25), border_width = 1, border_color = color.new(color.gray, 70))
 if showDash and barstate.islast
     gcol = dashGrade == "A+" ? color.new(color.green, 0) : color.new(color.gray, 0)
     table.cell(dash, 0, 0, "SNR DESK", text_color = color.new(color.orange, 0), text_size = size.small)
@@ -416,9 +436,28 @@ if showDash and barstate.islast
     table.cell(dash, 1, 9, htf == 1 ? "BULL" : htf == -1 ? "BEAR" : "flat", text_color = htf == 1 ? color.new(color.green, 0) : htf == -1 ? color.new(color.red, 0) : color.new(color.gray, 0), text_size = size.tiny)
     table.cell(dash, 0, 10, "Session", text_color = color.new(color.silver, 0), text_size = size.tiny)
     table.cell(dash, 1, 10, sessName, text_color = sessDead ? color.new(color.red, 0) : color.new(color.green, 0), text_size = size.tiny)
+    int fD = 0
+    int fS = 0
+    int tZ = 0
+    int wZ = 0
+    if array.size(zTop) > 0
+        for zi = 0 to array.size(zTop) - 1
+            tcz = array.get(zTouches, zi)
+            if tcz == 0
+                if array.get(zSide, zi) == 1
+                    fD += 1
+                else
+                    fS += 1
+            else if tcz == 1
+                tZ += 1
+            else
+                wZ += 1
+    anyFresh = fD + fS > 0
+    table.cell(dash, 0, 11, "Zone health", text_color = color.new(color.silver, 0), text_size = size.tiny)
+    table.cell(dash, 1, 11, str.tostring(fD) + "▲ / " + str.tostring(fS) + "▼ fresh · " + str.tostring(tZ) + " tested · " + str.tostring(wZ) + " weak", text_color = anyFresh ? color.new(color.green, 0) : color.new(color.gray, 0), text_size = size.tiny)
     if dashGrade != ""
-        table.cell(dash, 0, 11, "Levels", text_color = color.new(color.silver, 0), text_size = size.tiny)
-        table.cell(dash, 1, 11, "E " + str.tostring(dashE, "#.##") + " · SL " + str.tostring(dashS, "#.##") + " · TP " + str.tostring(dashT1, "#.##") + "/" + str.tostring(dashT2, "#.##"), text_color = color.new(color.white, 0), text_size = size.tiny)
+        table.cell(dash, 0, 12, "Levels", text_color = color.new(color.silver, 0), text_size = size.tiny)
+        table.cell(dash, 1, 12, "E " + str.tostring(dashE, "#.##") + " · SL " + str.tostring(dashS, "#.##") + " · TP " + str.tostring(dashT1, "#.##") + "/" + str.tostring(dashT2, "#.##"), text_color = color.new(color.white, 0), text_size = size.tiny)
 
 // ---- alerts --------------------------------------------------------------------
 alertcondition(aPlusBuy,  "A+ LONG setup",  "XAUUSD SNR FLOW: A+ LONG setup confirmed — entry, SL and TPs drawn on chart")

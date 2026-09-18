@@ -78,8 +78,17 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "10.10"
+SYSTEM_VERSION = "10.11"
 SYSTEM_CHANGELOG = {
+    "10.11": [
+        "FLOW TradingView indicator now shows BOX ZONE HEALTH: every "
+        "zone box is born labeled FRESH (solid border, full color), "
+        "degrades to TESTED (dashed, faded) after its first retest and "
+        "WEAK (gray) after further touches — broken zones vanish. The "
+        "dashboard adds a live zone-health line (fresh demand/supply "
+        "counts, tested, weak) so members see at a glance which zones "
+        "still have power",
+    ],
     "10.10": [
         "FLOW TradingView indicator pushed to MAX FLOW: swing strength 2 "
         "by default "

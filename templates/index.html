@@ -336,6 +336,61 @@
   .toast.out{opacity:0}
   @keyframes tin{from{transform:translateX(30px); opacity:0} to{transform:none; opacity:1}}
 
+
+  /* ============ V10.1 FUTURE THEME (additive overrides) ============ */
+  :root{ --cyan:#22d3ee; --neon-gold:#f5c66b; }
+  html,body{
+    background:
+      radial-gradient(900px 420px at 12% -6%, rgba(34,211,238,.07), transparent 60%),
+      radial-gradient(1100px 500px at 88% -10%, rgba(234,181,79,.06), transparent 55%),
+      linear-gradient(180deg, #05070d 0%, var(--bg) 45%),
+      var(--bg);}
+  body::before{ content:""; position:fixed; inset:0; pointer-events:none; z-index:0;
+    background:
+      linear-gradient(rgba(120,160,220,.045) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(120,160,220,.045) 1px, transparent 1px);
+    background-size:44px 44px;
+    mask-image:radial-gradient(1100px 640px at 50% -12%, #000 0%, transparent 78%);
+    -webkit-mask-image:radial-gradient(1100px 640px at 50% -12%, #000 0%, transparent 78%);}
+  body::after{ content:""; position:fixed; inset:-20%; pointer-events:none; z-index:0;
+    background:radial-gradient(620px 320px at 30% 110%, rgba(34,211,238,.055), transparent 60%),
+               radial-gradient(620px 320px at 78% 112%, rgba(234,181,79,.05), transparent 60%);
+    animation:aurora 16s ease-in-out infinite alternate;}
+  @keyframes aurora{from{transform:translate(0,0)} to{transform:translate(3%,-2.5%)}}
+  .wrap, header{position:relative; z-index:1}
+  header{background:rgba(7,10,16,.72); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
+    border-bottom:1px solid rgba(84,110,160,.38); box-shadow:0 1px 0 rgba(34,211,238,.08), 0 12px 40px -18px rgba(0,0,0,.9)}
+  .brand{background:linear-gradient(92deg,#fde9c0 0%, var(--neon-gold) 38%, #22d3ee 100%);
+    -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent;
+    filter:drop-shadow(0 0 14px rgba(234,181,79,.35))}
+  .brand .sub{letter-spacing:3.2px}
+  .card{position:relative; border-radius:14px;
+    background:linear-gradient(158deg, rgba(18,25,41,.86) 0%, rgba(10,14,24,.92) 100%);
+    border:1px solid rgba(88,116,168,.34);
+    backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px);
+    box-shadow:inset 0 1px 0 rgba(34,211,238,.14), 0 20px 54px -26px rgba(0,0,0,.85);
+    transition:border-color .25s, transform .25s, box-shadow .25s}
+  .card:hover{border-color:rgba(34,211,238,.5);
+    box-shadow:inset 0 1px 0 rgba(34,211,238,.3), 0 24px 60px -26px rgba(0,0,0,.9), 0 0 34px -12px rgba(34,211,238,.28)}
+  .card-head h2{letter-spacing:1.6px; font-size:12.5px; text-transform:uppercase; font-weight:800;
+    color:#d7e6ff; text-shadow:0 0 16px rgba(34,211,238,.25)}
+  #price{ text-shadow:0 0 26px rgba(245,198,107,.5), 0 0 3px rgba(245,198,107,.9);
+    transition:color .2s }
+  .livebadge{border-color:rgba(38,211,111,.5); box-shadow:0 0 18px -6px rgba(38,211,111,.7)}
+  button{transition:.2s}
+  button:hover{border-color:var(--cyan); color:#dff8ff;
+    box-shadow:0 0 22px -8px rgba(34,211,238,.8)}
+  .grade{box-shadow:0 0 16px -6px currentColor}
+  input, select{border-radius:9px}
+  ::-webkit-scrollbar{width:9px; height:9px}
+  ::-webkit-scrollbar-thumb{background:#1d2b45; border-radius:8px; border:2px solid #070a10}
+  ::-webkit-scrollbar-thumb:hover{background:#2b4166}
+  ::-webkit-scrollbar-track{background:transparent}
+  @media (prefers-reduced-motion: reduce){
+    body::after, .livebadge .dot{animation:none !important}
+    .card, #price, button{transition:none !important}
+  }
+
   @media (max-width:980px){ .grid{grid-template-columns:1fr} .signal{font-size:42px}
     .chartcard{position:static; height:86vh; min-height:420px}
     .panels.dual{grid-template-columns:1fr; grid-template-rows:1fr 1fr} }
@@ -514,6 +569,12 @@
           <button id="aiTraderBtn" class="mt5-btn" style="flex:none">Ask the AI trader now</button>
           <span class="small muted">the AI research desk's own best trade — the gated SNR engine still owns live orders</span>
         </div>
+      </div>
+
+      <div class="card" id="forecastCard">
+        <div class="card-head"><h2>🔭 Future Outlook · AI Council</h2>
+          <span class="muted small" id="fcSum">projecting…</span></div>
+        <div id="fcBody"><div class="muted small">the four-model council is computing the next 1h / 4h projection…</div></div>
       </div>
 
       <div class="card" id="mt5Card">
@@ -2770,6 +2831,43 @@ const INITIAL = {{ payload|tojson }};
   clearTimeout(entryTimer);
   entryTimer = setTimeout(loadEntry, state.entry ? 20000 : 3000);
   initRealtime();
+})();
+</script>
+<script>
+(() => {
+  const el = document.getElementById('fcBody');
+  const sum = document.getElementById('fcSum');
+  const n2 = (x) => Number(x).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  async function fcLoad(){
+    try{
+      const r = await fetch('/api/ai/forecast');
+      const j = await r.json();
+      if(!j.forecast){ sum.textContent = 'projecting…'; return; }
+      const f = j.forecast;
+      const dirTxt = {bullish:'▲ BULLISH', bearish:'▼ BEARISH', neutral:'◆ NEUTRAL'}[f.bias] || f.bias;
+      const col = {bullish:'var(--green)', bearish:'var(--red)', neutral:'var(--gold)'}[f.bias] || 'var(--gold)';
+      const mcol = {bullish:'var(--green)', bearish:'var(--red)', neutral:'var(--muted)'};
+      const rng = (k) => f[k] ? n2(f[k][0]) + ' – ' + n2(f[k][1]) : '—';
+      const rows = (f.models || []).map(m =>
+        '<div style="display:flex;gap:10px;align-items:center;padding:5px 0;border-top:1px solid var(--border)">' +
+        '<span class="small" style="min-width:128px">' + m.model + '</span>' +
+        '<span class="small mono" style="color:' + (mcol[m.bias] || 'var(--muted)') + '">' + m.bias + ' ' + m.pUp + '%</span>' +
+        '<span class="small mono muted" style="margin-left:auto;text-align:right">' + (m.h4 ? n2(m.h4[0]) + '–' + n2(m.h4[1]) : '') + '</span></div>').join('');
+      el.innerHTML =
+        '<div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin-bottom:8px">' +
+        '<div><div class="muted small" style="letter-spacing:1.5px">NEXT 4H BIAS</div>' +
+        '<div class="mono" style="font-size:26px;font-weight:800;color:' + col + ';text-shadow:0 0 18px ' + col + '">' +
+        dirTxt + ' <span style="font-size:15px">' + f.pUp + '% up</span></div></div>' +
+        '<div style="margin-left:auto;text-align:right">' +
+        '<div class="muted small">spot ' + n2(f.spot) + '</div>' +
+        '<div class="small mono">1h ' + rng('h1') + ' · 4h ' + rng('h4') + '</div></div></div>' +
+        '<div class="muted small" style="margin:2px 0 6px">ensemble of ' + f.n + ' models · median projection · not financial advice</div>' +
+        rows;
+      sum.textContent = 'updated ' + Math.max(0, Math.round(Date.now()/1000 - f.t)) + 's ago';
+    }catch(e){ sum.textContent = 'forecast unavailable'; }
+  }
+  fcLoad();
+  setInterval(() => { if(!document.hidden) fcLoad(); }, 60000);
 })();
 </script>
 </body>

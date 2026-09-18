@@ -78,8 +78,16 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "10.0"
+SYSTEM_VERSION = "10.1"
 SYSTEM_CHANGELOG = {
+    "10.1": [
+        "FUTURE update: the desk now tells you where it thinks price is "
+        "going — a new AI Council Forecast panel projects the next 1h "
+        "and 4h ranges with a calibrated up-probability from all four "
+        "models (ensembled by median), and the whole interface got the "
+        "next-gen terminal treatment: glass panels, neon accents, "
+        "animated grid",
+    ],
     "10.0": [
         "V10 MILESTONE — the desk, rebuilt end to end: TradingView-exact "
         "pricing (dedicated 24/7 level pusher, hard lock, one price "
@@ -4685,6 +4693,153 @@ def _llm_context():
     return "XAUUSD market snapshot:\n" + "\n".join(bits)
 
 
+_forecast_mem = {"t": 0.0, "data": None, "busy": False}
+
+_FORECAST_SYS = (
+    "You are a XAUUSD quant forecasting model. Reply with ONLY compact "
+    "JSON, no markdown: {\"bias\":\"bullish|bearish|neutral\","
+    "\"pUp\":<integer 0-100, probability price is higher in 4h>,"
+    "\"h1\":[<expected next-1h low>,<expected next-1h high>],"
+    "\"h4\":[<expected next-4h low>,<expected next-4h high>],"
+    "\"note\":\"max 15 words\"}. Ranges must bracket the current spot "
+    "and reflect recent volatility. Be calibrated, not bold.")
+
+
+def _forecast_brief():
+    """Market context for the forecasting council."""
+    try:
+        spot, _ = tick_spot(broker=False)
+    except Exception:  # noqa: BLE001
+        spot = None
+    try:
+        cl = data.get_candles("15m").get("candles") or []
+        atr = round((sum(float(c["h"]) - float(c["l"])
+                         for c in cl[-14:]) / 14), 2)
+    except Exception:  # noqa: BLE001
+        atr = None
+    d1 = data.get_candles("1d").get("candles") or []
+    hi = max((float(c["h"]) for c in d1[-1:]), default=None)
+    lo = min((float(c["l"]) for c in d1[-1:]), default=None)
+    rg = _ai_regime()
+    regime = {1: "bullish", -1: "bearish"}.get(rg, "flat/ranging")
+    if not spot:
+        return None
+    return (f"XAUUSD spot {spot:,.2f}. 60m regime: {regime}. 15m ATR "
+            f"{atr}. Today's high {hi:,.2f} low {lo:,.2f}. "
+            f"Forecast the next 1h and 4h.")
+
+
+def _forecast_parse(txt, spot, atr):
+    if not txt:
+        return None
+    a, b = txt.find("{"), txt.rfind("}")
+    if a < 0 or b <= a:
+        return None
+    try:
+        j = json.loads(txt[a:b + 1])
+        pUp = int(float(j.get("pUp", 50)))
+        if not 0 <= pUp <= 100:
+            return None
+        bias = str(j.get("bias") or "").lower()
+        if bias not in ("bullish", "bearish", "neutral"):
+            bias = ("bullish" if pUp > 58 else
+                    "bearish" if pUp < 42 else "neutral")
+        out = dict(bias=bias, pUp=pUp)
+        for k, span in (("h1", 3), ("h4", 8)):
+            r = j.get(k)
+            if (isinstance(r, list) and len(r) == 2):
+                try:
+                    lo_, hi_ = float(r[0]), float(r[1])
+                except (TypeError, ValueError):
+                    continue
+                if (lo_ < hi_ and lo_ < spot and hi_ > spot
+                        and hi_ - lo_ < span * max(atr or 5, 5) * 2):
+                    out[k] = [round(lo_, 2), round(hi_, 2)]
+        note = str(j.get("note") or "").strip()[:120]
+        if note:
+            out["note"] = note
+        return out
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _ai_forecast_run():
+    """Ask the whole council for a forward projection (parallel)."""
+    import llm_desk
+    brief = _forecast_brief()
+    if not brief:
+        return None
+    try:
+        spot, _ = tick_spot(broker=False)
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        cl = data.get_candles("15m").get("candles") or []
+        atr = sum(float(c["h"]) - float(c["l"]) for c in cl[-14:]) / 14
+    except Exception:  # noqa: BLE001
+        atr = 5.0
+    key = os.environ.get("GROQ_API_KEY")
+    if not key:
+        return None
+    rows, lock = [], threading.Lock()
+
+    def worker(mid, name):
+        try:
+            txt = llm_desk._call_groq(key, mid, brief, _FORECAST_SYS)
+            r = _forecast_parse(txt, spot, atr)
+        except Exception:  # noqa: BLE001
+            return
+        if r:
+            with lock:
+                rows.append(dict(model=name, **r))
+
+    ths = [threading.Thread(target=worker, args=(mid, name), daemon=True)
+           for mid, name in _council_models()]
+    for t in ths:
+        t.start()
+    for t in ths:
+        t.join(35)
+    if not rows:
+        return None
+
+    def med(vals):
+        vs = sorted(vals)
+        n = len(vs)
+        return vs[n // 2] if n % 2 else round((vs[n // 2 - 1] + vs[n // 2]) / 2, 2)
+
+    pUp = med([r["pUp"] for r in rows])
+    bias = ("bullish" if pUp >= 58 else "bearish" if pUp <= 42 else "neutral")
+    out = dict(t=int(time.time()), spot=round(spot, 2), n=len(rows),
+               pUp=pUp, bias=bias)
+    for k in ("h1", "h4"):
+        rs = [r[k] for r in rows if k in r]
+        if rs:
+            out[k] = [med([r[0] for r in rs]), med([r[1] for r in rs])]
+    out["models"] = sorted(rows, key=lambda r: -r["pUp"])
+    return out
+
+
+def get_forecast(max_age=900):
+    """Cached forward projection; refreshed in the background."""
+    now = time.time()
+    if _forecast_mem["data"] and now - _forecast_mem["t"] < max_age:
+        return _forecast_mem["data"]
+    if _forecast_mem["busy"]:
+        return _forecast_mem["data"]
+
+    def run():
+        _forecast_mem["busy"] = True
+        try:
+            d = _ai_forecast_run()
+            if d:
+                _forecast_mem.update(t=time.time(), data=d)
+        finally:
+            _forecast_mem["busy"] = False
+
+    threading.Thread(target=run, daemon=True).start()
+    return _forecast_mem["data"]
+
+
 def _llm_cycle():
     """Called every background loop: refresh external AI seats (24/7, own
     15-min cadence, non-blocking). The daily Telegram brief was removed —
@@ -5107,6 +5262,14 @@ def _ai_trader_payload(sig=None):
                    trades=(STATE.get("aiTrades") or [])[:8],
                    stats=_ai_trader_stats(),
                    council=_ai_council_stats())
+
+
+@app.route("/api/ai/forecast")
+def api_ai_forecast():
+    d = get_forecast()
+    if not d:
+        return jsonify(forecast=None, busy=_forecast_mem["busy"]), 202
+    return jsonify(forecast=d, busy=_forecast_mem["busy"])
 
 
 @app.route("/api/ai/trader")

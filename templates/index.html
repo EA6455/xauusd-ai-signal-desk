@@ -382,6 +382,16 @@
     box-shadow:0 0 22px -8px rgba(34,211,238,.8)}
   .grade{box-shadow:0 0 16px -6px currentColor}
   input, select{border-radius:9px}
+  .tvbtn{display:inline-flex; align-items:center; gap:6px; font-size:12.5px; font-weight:800;
+    letter-spacing:1px; text-decoration:none; padding:7px 13px; border-radius:10px;
+    color:#ffe9b8; border:1px solid rgba(234,181,79,.55);
+    background:linear-gradient(92deg, rgba(234,181,79,.18), rgba(34,211,238,.14));
+    text-shadow:0 0 12px rgba(234,181,79,.45);
+    animation:tvglow 2.6s ease-in-out infinite}
+  .tvbtn:hover{border-color:var(--gold); transform:translateY(-1px);
+    box-shadow:0 0 26px -6px rgba(234,181,79,.8)}
+  @keyframes tvglow{0%,100%{box-shadow:0 0 14px -6px rgba(234,181,79,.55)}
+    50%{box-shadow:0 0 26px -4px rgba(234,181,79,.85)}}
   ::-webkit-scrollbar{width:9px; height:9px}
   ::-webkit-scrollbar-thumb{background:#1d2b45; border-radius:8px; border:2px solid #070a10}
   ::-webkit-scrollbar-thumb:hover{background:#2b4166}
@@ -410,6 +420,7 @@
   <div class="livebadge" id="liveBadge"><span class="dot"></span><span id="liveTxt">LIVE</span></div>
   <div class="livebadge stale" id="mktBadge" title="CME gold market hours (Mon–Fri)"><span class="dot"></span><span id="mktTxt">GOLD…</span></div>
   <div class="hright">
+    <a href="/indicator" class="tvbtn" title="One-click copy the TradingView indicator">📋 TV INDICATOR</a>
     <span class="upd" id="upd">connecting…</span>
     <button id="sndBtn" title="Play a sound when a new alert fires">🔇 Sound off</button>
     <button id="refreshBtn">↻ Refresh</button>

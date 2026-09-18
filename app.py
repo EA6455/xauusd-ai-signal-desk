@@ -78,8 +78,14 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "10.5"
+SYSTEM_VERSION = "10.6"
 SYSTEM_CHANGELOG = {
+    "10.6": [
+        "The TradingView indicator now has a big glowing TV INDICATOR "
+        "button in the site header on every screen — one tap to the "
+        "one-click copy page. App cache refreshed so every device picks "
+        "it up immediately",
+    ],
     "10.5": [
         "One-click copy for the TradingView indicator on the website: "
         "/indicator is a dedicated page where members press one button "

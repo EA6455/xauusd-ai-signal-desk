@@ -1,8 +1,8 @@
 /* XAUUSD AI Signal Desk — service worker
    Network-first for the app shell (fresh code wins), cache fallback offline.
    API traffic is NEVER cached (live market data only). */
-const CACHE = "xauusd-desk-v1";
-const SHELL = ["/", "/manifest.json", "/icons/icon-192.png", "/icons/icon-512.png"];
+const CACHE = "xauusd-desk-v2";
+const SHELL = ["/", "/indicator", "/pine", "/manifest.json", "/icons/icon-192.png", "/icons/icon-512.png"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(

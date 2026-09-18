@@ -78,8 +78,17 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "2.9.14"
+SYSTEM_VERSION = "10.0"
 SYSTEM_CHANGELOG = {
+    "10.0": [
+        "V10 MILESTONE — the desk, rebuilt end to end: TradingView-exact "
+        "pricing (dedicated 24/7 level pusher, hard lock, one price "
+        "space), 4-model AI councils on both the trader and the analyst "
+        "desk (12 analysts total), regime-gated trade discipline, an AI "
+        "coach that autopsies every closed trade, a per-model "
+        "leaderboard, and an honest self-scoring journal. From here the "
+        "desk self-improves on its own measured results.",
+    ],
     "2.9.14": [
         "All-AI multiplier: the analyst desk's LLM seat is now a council "
         "too — GPT-oss 120B, GPT-oss 20B, Qwen 3.8 27B and Compound mini "

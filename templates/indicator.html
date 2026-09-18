@@ -129,6 +129,22 @@
       Fresh boxes forming = the market is building new ammunition; wait for the signal.</p>
   </div>
 
+  <div class="card" style="border-color:rgba(96,165,250,.4)">
+    <h1>③ <span style="color:#60a5fa">FRT</span> — Zone Health Scout · boxes only</h1>
+    <p><b>FRESH · TESTED · WEAK</b> zone boxes and nothing else — no signals, no alerts, no dashboard.
+       Strictly <b>non-repainting</b>: zones are born only from confirmed pivots, box edges are fixed forever,
+       and health changes are evaluated on closed bars only. A broken box is deleted, never redrawn.</p>
+    <div class="stats">
+      <span class="pill" style="border-color:rgba(96,165,250,.5); color:#93c5fd">FRESH solid · TESTED dashed · WEAK gray</span>
+      <span class="pill">no repaint · closed-bar states</span>
+      <span class="pill">read the market, pair with ① ②</span>
+    </div>
+    <button class="copybtn" id="copyBtn3" style="border:1px solid rgba(96,165,250,.6); background:linear-gradient(92deg, rgba(96,165,250,.16), rgba(34,211,238,.12)); color:#d6e9ff; text-shadow:0 0 14px rgba(96,165,250,.5)">📋 COPY FRT SCOUT — 1 CLICK</button>
+    <div class="hint" id="hint3">copies the whole script to your clipboard, ready to paste</div>
+    <div class="meta"><span id="mchars3">…</span><span id="mlines3">…</span></div>
+    <pre class="src" id="src3"><span style="color:var(--muted)">loading source…</span></pre>
+  </div>
+
   <div class="card">
     <h1>⚡ Install — 2 minutes each</h1>
     <ol class="steps">
@@ -187,6 +203,8 @@
   wire('copyBtn1', 'hint1', 'src1', 'mchars1', 'mlines1', '/pine',
        '✅ COPIED — NOW PASTE IT IN THE PINE EDITOR');
   wire('copyBtn2', 'hint2', 'src2', 'mchars2', 'mlines2', '/pine2',
+       '✅ COPIED — NOW PASTE IT IN THE PINE EDITOR');
+  wire('copyBtn3', 'hint3', 'src3', 'mchars3', 'mlines3', '/pine3',
        '✅ COPIED — NOW PASTE IT IN THE PINE EDITOR');
 })();
 </script>

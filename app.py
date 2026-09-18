@@ -78,8 +78,17 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "10.12"
+SYSTEM_VERSION = "10.13"
 SYSTEM_CHANGELOG = {
+    "10.13": [
+        "THIRD TradingView indicator: FRT [Zone Health Scout] — FRESH, "
+        "TESTED and WEAK zone boxes and nothing else. No signals, no "
+        "alerts, no dashboard. Strictly non-repainting: zones are born "
+        "only from confirmed pivots, box edges are fixed at creation, "
+        "and health-state changes are evaluated on closed bars only. "
+        "Live at /pine3 with its own one-click copy button and auto-"
+        "posted to the group's INDICATOR topic",
+    ],
     "10.12": [
         "FLOW TradingView indicator, per member request: zone boxes now "
         "show only TESTED and WEAK labels (fresh zones are clean solid "
@@ -4393,7 +4402,21 @@ def _announce_indicator():
         "sniper-grade A+ (80% win). B+ measures 45% and is EXCLUDED.\n"
         "Use on the 15m chart alongside indicator \u2116 1.\n"
         "Alerts: 'A+ LONG/SHORT setup' + 'REV LONG/SHORT setup'.")
-    total = n1 + n2
+    time.sleep(1.5)
+    # indicator #3 — FRT zone health scout (boxes only, no repaint)
+    n3 = _post_indicator_source(
+        "static/xauusd_frt.pine",
+        "\U0001F9ED INDICATOR \u2116 3 \u00b7 FRT [Zone Health Scout] \u2014 "
+        "boxes only\n\n"
+        "FRESH \u00b7 TESTED \u00b7 WEAK zone boxes, nothing else: no signals, "
+        "no alerts, no dashboard. Strictly NO REPAINT \u2014 zones are born "
+        "from confirmed pivots, edges are fixed forever, and state "
+        "changes are evaluated on closed bars only.\n"
+        "Use it to READ the market: solid FRESH boxes = untested power, "
+        "dashed TESTED = caution, gray WEAK = expect a break. Pair with "
+        "\u2116 1 (A+ SNIPER) and \u2116 2 (FLOW) for the signals.\n"
+        "One-click copy: the desk website \u2192 \U0001F4CB TV INDICATOR.")
+    total = n1 + n2 + n3
     if total:
         _tg_post_topic(
             "\U0001F4E6 HOW TO TRADE THE ZONE BOXES (FLOW indicator)\n\n"
@@ -4418,7 +4441,8 @@ def _announce_indicator():
             _tg_topics().get("indicator"))
         time.sleep(1.5)
         _tg_post_topic(
-            "\u2705 Both indicators posted. Install guide, one-click copy "
+            "\u2705 All three indicators posted. Install guide, one-click "
+            "copy "
             "and the full box-trading guide: the desk website \u2192 "
             "\U0001F4CB TV INDICATOR. Red error in the Pine Editor? Message "
             "the group. Not financial advice \u2014 every signal is scored "
@@ -4428,7 +4452,7 @@ def _announce_indicator():
         STATE["lastIndicatorPost"] = dict(t=int(time.time()),
                                           parts=total, sent=total)
         _save_state()
-    print(f"[desk] posted both indicators to INDICATOR topic "
+    print(f"[desk] posted all 3 indicators to INDICATOR topic "
           f"({total} parts)", flush=True)
     return total
 
@@ -5513,6 +5537,20 @@ def pine_indicator_flow():
     try:
         with open(os.path.join(app.root_path, "static",
                                "xauusd_flow.pine")) as f:
+            txt = f.read()
+        return Response(txt, mimetype="text/plain")
+    except Exception:  # noqa: BLE001
+        return Response("-- indicator file missing --", mimetype="text/plain")
+
+
+@app.route("/pine3")
+def pine_indicator_frt():
+    """The desk's THIRD TradingView indicator — FRT [Zone Health Scout]:
+    FRESH/TESTED/WEAK zone boxes only, strictly non-repainting, no
+    signals, no dashboard. Pure market structure reading."""
+    try:
+        with open(os.path.join(app.root_path, "static",
+                               "xauusd_frt.pine")) as f:
             txt = f.read()
         return Response(txt, mimetype="text/plain")
     except Exception:  # noqa: BLE001

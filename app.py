@@ -78,8 +78,18 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "10.11"
+SYSTEM_VERSION = "10.12"
 SYSTEM_CHANGELOG = {
+    "10.12": [
+        "FLOW TradingView indicator, per member request: zone boxes now "
+        "show only TESTED and WEAK labels (fresh zones are clean solid "
+        "boxes marked by the signals themselves), each label carries its "
+        "trading instruction ('TESTED \u00b7 rev only', 'WEAK \u00b7 break "
+        "watch'), and a full how-to-trade-the-boxes guide is now on the "
+        "website and posted to the group's INDICATOR topic \u2014 solid = "
+        "trade the A+ signal, dashed = reversal only at TP1, gray = no "
+        "bounces, expect a break",
+    ],
     "10.11": [
         "FLOW TradingView indicator now shows BOX ZONE HEALTH: every "
         "zone box is born labeled FRESH (solid border, full color), "
@@ -4386,10 +4396,33 @@ def _announce_indicator():
     total = n1 + n2
     if total:
         _tg_post_topic(
-            "\u2705 Both indicators posted. Install guide and one-click "
-            "copy: the desk website \u2192 \U0001F4CB TV INDICATOR. Red error "
-            "in the Pine Editor? Message the group. Not financial "
-            "advice \u2014 every signal is scored honestly on the desk.",
+            "\U0001F4E6 HOW TO TRADE THE ZONE BOXES (FLOW indicator)\n\n"
+            "\U0001F7E2 SOLID box, no text = FRESH zone\n"
+            "Untested institutional zone \u2014 A+ signals fire from here. "
+            "When \u25B2 LONG / \u25BC SHORT prints with entry, SL, TP lines from a "
+            "solid box: take the trade. Half off at TP1 (0.75R), stop to "
+            "breakeven, runner to TP2 (1.5R).\n\n"
+            "\U0001F537 DASHED box \u2014 TESTED \u00b7 rev only\n"
+            "One retest absorbed \u2014 half the power spent. Trade the "
+            "REVERSAL only: wait for a confirmation candle (engulfing/pin) "
+            "at the box edge, enter on close, stop beyond the box, take "
+            "TP1 only (~0.75R), smaller size. This is the REV cohort "
+            "(92% win when confirmed).\n\n"
+            "\u2b1c GRAY box \u2014 WEAK \u00b7 break watch\n"
+            "Consumed. Do NOT expect bounces here. Use it as a breakout "
+            "map: a clean push through a WEAK zone often accelerates \u2014 "
+            "breakout traders stop on the far side and ride it. No "
+            "signals fire from WEAK boxes.\n\n"
+            "Box disappears = zone broke, move often extends. Fresh "
+            "boxes forming = new ammunition \u2014 wait for the signal.",
+            _tg_topics().get("indicator"))
+        time.sleep(1.5)
+        _tg_post_topic(
+            "\u2705 Both indicators posted. Install guide, one-click copy "
+            "and the full box-trading guide: the desk website \u2192 "
+            "\U0001F4CB TV INDICATOR. Red error in the Pine Editor? Message "
+            "the group. Not financial advice \u2014 every signal is scored "
+            "honestly on the desk.",
             _tg_topics().get("indicator"))
     with STATE_LOCK:
         STATE["lastIndicatorPost"] = dict(t=int(time.time()),

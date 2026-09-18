@@ -191,7 +191,7 @@ if not na(ph) and bar_index > kSwing + 2
                     array.push(zSignaled, false)
                     array.push(zCreated, bar_index)
                     array.push(zTouches, 0)
-                    array.push(zBox, showZones ? box.new(sIdx, sTop, bar_index + 6, sBot, border_color = color.new(color.green, 35), bgcolor = color.new(color.green, 84), border_width = 1, text = "FRESH", text_color = color.new(color.green, 10), text_size = size.tiny) : box(na))
+                    array.push(zBox, showZones ? box.new(sIdx, sTop, bar_index + 6, sBot, border_color = color.new(color.green, 35), bgcolor = color.new(color.green, 84), border_width = 1) : box(na))
             // this low is now paired (first following high = this one)
             array.remove(loIdx, i)
             array.remove(loVal, i)
@@ -242,7 +242,7 @@ if not na(pl) and bar_index > kSwing + 2
                     array.push(zSignaled, false)
                     array.push(zCreated, bar_index)
                     array.push(zTouches, 0)
-                    array.push(zBox, showZones ? box.new(sIdx, sTop, bar_index + 6, sBot, border_color = color.new(color.red, 35), bgcolor = color.new(color.red, 84), border_width = 1, text = "FRESH", text_color = color.new(color.red, 10), text_size = size.tiny) : box(na))
+                    array.push(zBox, showZones ? box.new(sIdx, sTop, bar_index + 6, sBot, border_color = color.new(color.red, 35), bgcolor = color.new(color.red, 84), border_width = 1) : box(na))
             array.remove(hiIdx, i)
             array.remove(hiVal, i)
             array.remove(hiAtr, i)
@@ -299,12 +299,12 @@ if array.size(zTop) > 0
                 if not na(bxh)
                     zc = s == 1 ? color.green : color.red
                     if tN == 1
-                        box.set_text(bxh, "TESTED")
+                        box.set_text(bxh, "TESTED · rev only")
                         box.set_text_color(bxh, color.new(zc, 25))
                         box.set_border_style(bxh, line.style_dashed)
                         box.set_bgcolor(bxh, color.new(zc, 92))
                     else
-                        box.set_text(bxh, "WEAK")
+                        box.set_text(bxh, "WEAK · break watch")
                         box.set_text_color(bxh, color.new(color.gray, 15))
                         box.set_border_color(bxh, color.new(color.gray, 45))
                         box.set_bgcolor(bxh, color.new(zc, 95))
@@ -411,7 +411,7 @@ bgcolor(showSess and sessDead ? color.new(color.gray, 94) : na)
 f_ok(c) =>
     c ? "✓" : "✗"
 
-var table dash = table.new(position.top_right, 2, 13, bgcolor = color.new(#0b0f17, 25), border_width = 1, border_color = color.new(color.gray, 70))
+var table dash = table.new(position.top_right, 2, 14, bgcolor = color.new(#0b0f17, 25), border_width = 1, border_color = color.new(color.gray, 70))
 if showDash and barstate.islast
     gcol = dashGrade == "A+" ? color.new(color.green, 0) : color.new(color.gray, 0)
     table.cell(dash, 0, 0, "SNR DESK", text_color = color.new(color.orange, 0), text_size = size.small)
@@ -455,9 +455,11 @@ if showDash and barstate.islast
     anyFresh = fD + fS > 0
     table.cell(dash, 0, 11, "Zone health", text_color = color.new(color.silver, 0), text_size = size.tiny)
     table.cell(dash, 1, 11, str.tostring(fD) + "▲ / " + str.tostring(fS) + "▼ fresh · " + str.tostring(tZ) + " tested · " + str.tostring(wZ) + " weak", text_color = anyFresh ? color.new(color.green, 0) : color.new(color.gray, 0), text_size = size.tiny)
+    table.cell(dash, 0, 12, "Box guide", text_color = color.new(color.silver, 0), text_size = size.tiny)
+    table.cell(dash, 1, 12, "solid = trade it · dashed TESTED = reversal only · gray WEAK = expect break", text_color = color.new(color.silver, 0), text_size = size.tiny)
     if dashGrade != ""
-        table.cell(dash, 0, 12, "Levels", text_color = color.new(color.silver, 0), text_size = size.tiny)
-        table.cell(dash, 1, 12, "E " + str.tostring(dashE, "#.##") + " · SL " + str.tostring(dashS, "#.##") + " · TP " + str.tostring(dashT1, "#.##") + "/" + str.tostring(dashT2, "#.##"), text_color = color.new(color.white, 0), text_size = size.tiny)
+        table.cell(dash, 0, 13, "Levels", text_color = color.new(color.silver, 0), text_size = size.tiny)
+        table.cell(dash, 1, 13, "E " + str.tostring(dashE, "#.##") + " · SL " + str.tostring(dashS, "#.##") + " · TP " + str.tostring(dashT1, "#.##") + "/" + str.tostring(dashT2, "#.##"), text_color = color.new(color.white, 0), text_size = size.tiny)
 
 // ---- alerts --------------------------------------------------------------------
 alertcondition(aPlusBuy,  "A+ LONG setup",  "XAUUSD SNR FLOW: A+ LONG setup confirmed — entry, SL and TPs drawn on chart")

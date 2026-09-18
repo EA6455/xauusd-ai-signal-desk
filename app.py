@@ -78,8 +78,18 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "10.8"
+SYSTEM_VERSION = "10.9"
 SYSTEM_CHANGELOG = {
+    "10.9": [
+        "SECOND TradingView indicator live: FLOW [15m] — doubles the "
+        "15m signal count the honest way, A+ (80% win) plus the newly "
+        "measured REV reversal cohort (92% win, n=13: fresh BOS-origin "
+        "zone + confirmed retest + live session with neutral structure "
+        "and 1H trend). B+ at 45% was measured and excluded. Both "
+        "indicators now have their own one-click copy buttons on the "
+        "website and both sources auto-post to the group's INDICATOR "
+        "topic",
+    ],
     "10.8": [
         "More A+ signals, honestly earned: the same 8/8 engine now runs "
         "on the 1H and 4H charts too — 1H measures 63% win at ~2.5 "
@@ -4285,6 +4295,35 @@ _desk_mem = dict(lastVersionPost=None, lastDigestPost=None)
 DESK_UPDATE_S = 6 * 3600      # member digest cadence
 
 
+def _post_indicator_source(pine_path, intro):
+    """Post one indicator's source to the INDICATOR topic in parts."""
+    tid = _tg_topics().get("indicator")
+    if not tid:
+        return 0
+    try:
+        with open(os.path.join(app.root_path, pine_path)) as f:
+            pine = f.read()
+    except Exception:  # noqa: BLE001
+        return 0
+    if not pine.strip():
+        return 0
+    _tg_post_topic(intro, tid)
+    parts, buf, size = [], [], 0
+    for line in pine.split("\n"):
+        if size + len(line) + 1 > 3000 and buf:
+            parts.append("\n".join(buf))
+            buf, size = [], 0
+        buf.append(line)
+        size += len(line) + 1
+    if buf:
+        parts.append("\n".join(buf))
+    for i, p in enumerate(parts, 1):
+        if _tg_post_topic(f"\U0001F4DC SOURCE \u2014 part {i}/{len(parts)}\n"
+                          f"\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\n{p}", tid):
+            time.sleep(1.2)
+    return len(parts)
+
+
 def _announce_indicator():
     """Post the CURRENT TradingView indicator source to the INDICATOR
     topic in the member group, split into copy-paste-friendly parts
@@ -4296,57 +4335,49 @@ def _announce_indicator():
     tid = _tg_topics().get("indicator")
     if not tid:
         return 0
-    try:
-        with open(os.path.join(app.root_path, "static",
-                               "xauusd_snr.pine")) as f:
-            pine = f.read()
-    except Exception:  # noqa: BLE001
-        return 0
-    if not pine.strip():
-        return 0
-    _tg_post_topic(
-        "\U0001F4CB XAUUSD SNR DESK \u00b7 TradingView INDICATOR (A+ only)\n\n"
-        "The desk's exact SNR engine for your TradingView chart:\n"
-        "\u2022 zones, structure, 8-check grading \u2014 signals only at A+ (8/8)\n"
-        "\u2022 SELL signals included (engine sees both sides)\n"
-        "\u2022 levels: half off at TP1 0.75R, stop to breakeven, runner 1.5R\n\n"
-        "HOW TO INSTALL (2 minutes) \u2014 EASIEST: open the desk \u2192 "
-        "SNR Entry card \u2192 \U0001F4CB TV INDICATOR \u2192 one button copies "
-        "the whole script.\n"
-        "Or from here: TradingView \u2192 XAUUSD \u2192 15m chart \u2192 Pine "
-        "Editor \u2192 paste ALL parts below in order \u2192 Save \u2192 Add to "
-        "chart. Add it to the 1H and 4H charts too \u2014 the desk sends "
-        "A+ cards from all three timeframes.\n"
-        "Alerts \u2192 condition: this indicator \u2192 'A+ BUY setup' / "
-        "'A+ SELL setup'.\n\n"
-        f"Source below in parts \u2014 paste them as ONE script.", tid)
-    parts, buf, size = [], [], 0
-    for line in pine.split("\n"):
-        if size + len(line) + 1 > 3000 and buf:
-            parts.append("\n".join(buf))
-            buf, size = [], 0
-        buf.append(line)
-        size += len(line) + 1
-    if buf:
-        parts.append("\n".join(buf))
-    sent = 0
-    for i, p in enumerate(parts, 1):
-        if _tg_post_topic(f"\U0001F4DC SOURCE \u2014 part {i}/{len(parts)}\n"
-                          f"\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\n{p}", tid):
-            sent += 1
-            time.sleep(1.2)               # Telegram rate courtesy
-    _tg_post_topic(
-        "\u2705 That's the whole script. Questions or a red error in the "
-        "Pine Editor? Message the group \u2014 the desk fixes it.\n"
-        "Not financial advice. Signals are also posted here as cards with "
-        "the same levels.", tid)
+    # indicator #1 — the A+ sniper
+    n1 = _post_indicator_source(
+        "static/xauusd_snr.pine",
+        "\U0001F4CB INDICATOR \u2116 1 \u00b7 A+ SNIPER \u2014 XAUUSD SNR DESK\n\n"
+        "The strict engine: signals only at A+ (8/8 checks).\n"
+        "Backtest: 80% win \u00b7 0.75R exit \u00b7 BUY and SELL \u00b7 draws the "
+        "full trade (entry, SL, TP1/TP2, profit/risk zones).\n"
+        "Charts: 15m (main), 1H and 4H (extra A+ streams).\n\n"
+        "EASIEST INSTALL: open the desk website \u2192 \U0001F4CB TV INDICATOR "
+        "button \u2192 one click copies the whole script. Or paste ALL parts "
+        "below into the Pine Editor as ONE script.\n"
+        "Alerts: 'A+ LONG setup' / 'A+ SHORT setup'.")
+    time.sleep(1.5)
+    # indicator #2 — FLOW (15m): more signals, honestly labeled
+    n2 = _post_indicator_source(
+        "static/xauusd_flow.pine",
+        "\U0001F4E2 INDICATOR \u2116 2 \u00b7 FLOW [15m] \u2014 more signals, "
+        "honestly earned\n\n"
+        "Same engine, two measured cohorts, both labeled on every "
+        "signal:\n"
+        "\u2022 A+ (8/8) \u2014 80% win\n"
+        "\u2022 REV reversal cohort \u2014 92% win (n=13): fresh BOS-origin "
+        "zone + confirmed retest + live session, structure & 1H trend "
+        "neutral \u2014 the early-reversal trades the sniper skips\n"
+        "\u2248 12 signals/month on 15m (double the sniper). B+ measures "
+        "45% and is EXCLUDED.\n"
+        "Use on the 15m chart alongside indicator \u2116 1.\n"
+        "Alerts: 'A+ LONG/SHORT setup' + 'REV LONG/SHORT setup'.")
+    total = n1 + n2
+    if total:
+        _tg_post_topic(
+            "\u2705 Both indicators posted. Install guide and one-click "
+            "copy: the desk website \u2192 \U0001F4CB TV INDICATOR. Red error "
+            "in the Pine Editor? Message the group. Not financial "
+            "advice \u2014 every signal is scored honestly on the desk.",
+            _tg_topics().get("indicator"))
     with STATE_LOCK:
         STATE["lastIndicatorPost"] = dict(t=int(time.time()),
-                                          parts=len(parts), sent=sent)
+                                          parts=total, sent=total)
         _save_state()
-    print(f"[desk] posted indicator source to INDICATOR topic "
-          f"({sent}/{len(parts)} parts)", flush=True)
-    return sent
+    print(f"[desk] posted both indicators to INDICATOR topic "
+          f"({total} parts)", flush=True)
+    return total
 
 
 def _announce_version():
@@ -5419,6 +5450,20 @@ def _ai_trader_payload(sig=None):
                    trades=(STATE.get("aiTrades") or [])[:8],
                    stats=_ai_trader_stats(),
                    council=_ai_council_stats())
+
+
+@app.route("/pine2")
+def pine_indicator_flow():
+    """The desk's SECOND TradingView indicator — FLOW (15m): A+ setups
+    plus the measured REV reversal cohort, roughly double the signals
+    of the sniper at honest, per-cohort stats."""
+    try:
+        with open(os.path.join(app.root_path, "static",
+                               "xauusd_flow.pine")) as f:
+            txt = f.read()
+        return Response(txt, mimetype="text/plain")
+    except Exception:  # noqa: BLE001
+        return Response("-- indicator file missing --", mimetype="text/plain")
 
 
 @app.route("/indicator")

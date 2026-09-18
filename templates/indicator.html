@@ -3,10 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>XAUUSD SNR Desk · TradingView Indicator</title>
+<title>XAUUSD SNR Desk · TradingView Indicators</title>
 <style>
   :root{ --bg:#070a10; --card:#101624; --border:#1b2536; --text:#e9edf5;
-    --muted:#8b95a8; --gold:#eab54f; --green:#26d36f; --cyan:#22d3ee; }
+    --muted:#8b95a8; --gold:#eab54f; --green:#26d36f; --cyan:#22d3ee;
+    --teal:#14b8a6; }
   *{box-sizing:border-box; margin:0; padding:0}
   html,body{background:
       radial-gradient(900px 420px at 12% -6%, rgba(34,211,238,.07), transparent 60%),
@@ -23,116 +24,145 @@
     background:linear-gradient(158deg, rgba(18,25,41,.86), rgba(10,14,24,.92));
     backdrop-filter:blur(12px); box-shadow:inset 0 1px 0 rgba(34,211,238,.14), 0 20px 54px -26px rgba(0,0,0,.85);
     margin-bottom:18px}
-  h1{font-size:19px; letter-spacing:1.2px; text-transform:uppercase; margin-bottom:8px}
-  h1 .au{color:var(--gold)}
+  h1{font-size:18px; letter-spacing:1.2px; text-transform:uppercase; margin-bottom:8px}
+  h1 .n{color:var(--gold)}
+  h1 .n2{color:var(--teal)}
   p{color:var(--muted); line-height:1.55; font-size:14px}
+  p b{color:var(--text)}
+  .stats{display:flex; gap:10px; flex-wrap:wrap; margin-top:10px}
+  .pill{font-size:12px; font-weight:700; padding:5px 10px; border-radius:999px;
+    border:1px solid var(--border); color:var(--muted)}
+  .pill.g{border-color:rgba(38,211,111,.5); color:var(--green)}
+  .pill.t{border-color:rgba(20,184,166,.5); color:var(--teal)}
+  .pill.y{border-color:rgba(234,181,79,.5); color:var(--gold)}
+  .copybtn{display:block; width:100%; cursor:pointer; margin-top:14px; border-radius:12px;
+    padding:16px; font-size:16px; font-weight:800; letter-spacing:1.2px; transition:.2s}
+  .btn1{border:1px solid rgba(234,181,79,.6);
+    background:linear-gradient(92deg, rgba(234,181,79,.16), rgba(34,211,238,.12));
+    color:#ffe9b8; text-shadow:0 0 14px rgba(234,181,79,.5)}
+  .btn2{border:1px solid rgba(20,184,166,.6);
+    background:linear-gradient(92deg, rgba(20,184,166,.16), rgba(34,211,238,.12));
+    color:#c8fff4; text-shadow:0 0 14px rgba(20,184,166,.5)}
+  .copybtn:hover{transform:translateY(-1px)}
+  .btn1:hover{box-shadow:0 0 30px -8px rgba(234,181,79,.7); border-color:var(--gold)}
+  .btn2:hover{box-shadow:0 0 30px -8px rgba(20,184,166,.7); border-color:var(--teal)}
+  .copybtn.ok{border-color:var(--green)!important; color:#c9f7dd!important;
+    background:linear-gradient(92deg, rgba(38,211,111,.18), rgba(34,211,238,.10))!important}
+  .hint{margin-top:9px; text-align:center; color:var(--muted); font-size:12.5px; min-height:16px}
+  .meta{display:flex; gap:14px; flex-wrap:wrap; color:var(--muted); font-size:12px; margin-top:6px}
+  pre.src{margin-top:14px; max-height:360px; overflow:auto; border-radius:10px;
+    border:1px solid var(--border); background:#0a0e17; padding:14px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px;
+    line-height:1.5; color:#c8d6ec; white-space:pre; user-select:all}
+  a{color:var(--cyan)}
   .steps{counter-reset:s; list-style:none; margin-top:12px}
   .steps li{counter-increment:s; position:relative; padding:7px 0 7px 40px; color:var(--text); font-size:14px}
   .steps li::before{content:counter(s); position:absolute; left:0; top:6px; width:26px; height:26px;
     border-radius:8px; border:1px solid rgba(34,211,238,.5); color:var(--cyan);
     display:flex; align-items:center; justify-content:center; font-weight:800; font-size:13px}
   .steps small{display:block; color:var(--muted)}
-  .copybtn{display:block; width:100%; cursor:pointer; border:1px solid rgba(234,181,79,.6);
-    background:linear-gradient(92deg, rgba(234,181,79,.16), rgba(34,211,238,.12));
-    color:#ffe9b8; border-radius:12px; padding:16px; font-size:16.5px; font-weight:800;
-    letter-spacing:1.2px; transition:.2s; text-shadow:0 0 14px rgba(234,181,79,.5)}
-  .copybtn:hover{transform:translateY(-1px); box-shadow:0 0 30px -8px rgba(234,181,79,.7); border-color:var(--gold)}
-  .copybtn.ok{border-color:var(--green); color:#c9f7dd;
-    background:linear-gradient(92deg, rgba(38,211,111,.18), rgba(34,211,238,.10))}
-  .hint{margin-top:9px; text-align:center; color:var(--muted); font-size:12.5px; min-height:16px}
-  .meta{display:flex; gap:14px; flex-wrap:wrap; color:var(--muted); font-size:12px; margin-top:6px}
-  pre#src{margin-top:14px; max-height:420px; overflow:auto; border-radius:10px;
-    border:1px solid var(--border); background:#0a0e17; padding:14px;
-    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px;
-    line-height:1.5; color:#c8d6ec; white-space:pre; user-select:all}
-  pre#src::selection, pre#src *::selection{background:rgba(34,211,238,.35)}
-  a{color:var(--cyan)}
   .row{display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin-top:14px}
   .tvlink{font-size:13px; font-weight:700; color:var(--cyan); text-decoration:none;
     border:1px solid var(--border); border-radius:9px; padding:8px 13px}
   .tvlink:hover{border-color:var(--cyan); box-shadow:0 0 20px -8px rgba(34,211,238,.8)}
-  .loading{color:var(--muted); font-size:13px}
 </style>
 </head>
 <body>
 <div class="wrap">
   <div class="brand">XAUUSD SNR DESK</div>
-  <div class="sub">TradingView Indicator · A+ only</div>
+  <div class="sub">TradingView Indicators · one-click copy</div>
 
   <div class="card">
-    <h1>📋 <span class="au">One-Click Copy</span> — Pine Script</h1>
-    <p>The desk's exact SNR engine for your TradingView chart. Signals only at
-       <b style="color:var(--green)">A+ (8/8 checks)</b> — never B or C. BUY and SELL sides,
-       levels TP1 0.75R / runner 1.5R, same as the cards posted in the group.
-       Works on <b>15m, 1H and 4H</b> — the desk sends cards from all three.</p>
-    <button class="copybtn" id="copyBtn">📋 COPY FULL SCRIPT — 1 CLICK</button>
-    <div class="hint" id="hint">copies the whole script to your clipboard, ready to paste</div>
-    <div class="meta"><span id="mchars">…</span><span id="mlines">…</span>
-      <span>source of truth: this desk updates it automatically</span></div>
+    <h1>① <span class="n">A+ SNIPER</span> — strict 8/8</h1>
+    <p>The desk's main engine. Signals <b>only at A+ (8/8 checks)</b> — never B or C.
+       Draws the full trade: entry, SL, TP1/TP2, profit &amp; risk zones. BUY and SELL.</p>
+    <div class="stats">
+      <span class="pill g">A+ 80% win (backtest)</span>
+      <span class="pill y">≈ 6–9 signals/month</span>
+      <span class="pill">15m · 1H · 4H charts</span>
+    </div>
+    <button class="copybtn btn1" id="copyBtn1">📋 COPY A+ SNIPER — 1 CLICK</button>
+    <div class="hint" id="hint1">copies the whole script to your clipboard, ready to paste</div>
+    <div class="meta"><span id="mchars1">…</span><span id="mlines1">…</span></div>
+    <pre class="src" id="src1"><span style="color:var(--muted)">loading source…</span></pre>
+  </div>
+
+  <div class="card" style="border-color:rgba(20,184,166,.4)">
+    <h1>② <span class="n2">FLOW [15m]</span> — more signals, honestly earned</h1>
+    <p>The desk's second indicator for the 15m chart. Two measured cohorts, every signal labeled:
+       <b>A+ (8/8)</b> plus the <b style="color:var(--teal)">REV reversal cohort</b> — fresh BOS-origin
+       zone + confirmed retest + live session with neutral structure and 1H trend (the early-reversal
+       trades the sniper skips). B+ was measured at 45% and <b>excluded</b>.</p>
+    <div class="stats">
+      <span class="pill g">A+ 80% win</span>
+      <span class="pill t">REV 92% win (n=13)</span>
+      <span class="pill y">≈ 12 signals/month on 15m</span>
+    </div>
+    <button class="copybtn btn2" id="copyBtn2">📋 COPY FLOW 15m — 1 CLICK</button>
+    <div class="hint" id="hint2">copies the whole script to your clipboard, ready to paste</div>
+    <div class="meta"><span id="mchars2">…</span><span id="mlines2">…</span></div>
+    <pre class="src" id="src2"><span style="color:var(--muted)">loading source…</span></pre>
   </div>
 
   <div class="card">
-    <h1>⚡ Install — 2 minutes</h1>
+    <h1>⚡ Install — 2 minutes each</h1>
     <ol class="steps">
-      <li>Tap <b>COPY FULL SCRIPT</b> above <small>the entire Pine Script is now in your clipboard</small></li>
-      <li>Open TradingView → XAUUSD → <b>15m chart</b> (main stream)
-          <small>also add it to <b>1H</b> and <b>4H</b> charts — extra A+ streams, same discipline · <a href="https://www.tradingview.com/chart/?symbol=OANDA%3AXAUUSD" target="_blank" rel="noopener">open the chart ↗</a></small></li>
+      <li>Tap the <b>COPY</b> button of the indicator you want
+          <small>the entire Pine Script is now in your clipboard</small></li>
+      <li>Open TradingView → XAUUSD → your chart
+          <small>SNIPER: 15m main + 1H + 4H · FLOW: 15m ·
+          <a href="https://www.tradingview.com/chart/?symbol=OANDA%3AXAUUSD" target="_blank" rel="noopener">open the chart ↗</a></small></li>
       <li>Open <b>Pine Editor</b> (bottom bar) → paste → <b>Save</b> → <b>Add to chart</b>
-          <small>delete any demo code in the editor before pasting</small></li>
-      <li>Set alerts: condition = this indicator → <b>"A+ BUY setup"</b> / <b>"A+ SELL setup"</b>
-          <small>TradingView pushes them to your phone the same moment the desk posts its card</small></li>
+          <small>delete any demo code in the editor before pasting; each indicator gets its own chart tab or pane slot</small></li>
+      <li>Set alerts on the indicator's conditions
+          <small>SNIPER: "A+ LONG/SHORT setup" · FLOW: also "REV LONG/SHORT setup"</small></li>
     </ol>
     <div class="row">
       <a class="tvlink" href="https://www.tradingview.com/chart/?symbol=OANDA%3AXAUUSD" target="_blank" rel="noopener">Open XAUUSD chart ↗</a>
       <a class="tvlink" href="/" style="color:var(--gold); border-color:rgba(234,181,79,.45)">← Back to the desk</a>
     </div>
   </div>
-
-  <div class="card">
-    <h1>📜 Source <span style="color:var(--muted); font-size:12px; letter-spacing:1px">(reference — the button above copies it all)</span></h1>
-    <pre id="src"><span class="loading">loading source…</span></pre>
-  </div>
 </div>
 
 <script>
 (() => {
-  const btn = document.getElementById('copyBtn');
-  const hint = document.getElementById('hint');
-  const pre = document.getElementById('src');
-  let full = '';
-  fetch('/pine').then(r => r.text()).then(t => {
-    full = t;
-    pre.textContent = t;
-    document.getElementById('mchars').textContent =
-      new Intl.NumberFormat().format(t.length) + ' characters';
-    document.getElementById('mlines').textContent =
-      new Intl.NumberFormat().format(t.split('\n').length) + ' lines';
-  }).catch(() => { pre.textContent = 'could not load source — refresh the page'; });
-
-  function ok(){ btn.classList.add('ok');
-    btn.textContent = '✅ COPIED — NOW PASTE IT IN THE PINE EDITOR';
-    hint.textContent = 'TradingView → XAUUSD 15m → Pine Editor → paste → Save → Add to chart';
-    setTimeout(() => { btn.classList.remove('ok');
-      btn.textContent = '📋 COPY FULL SCRIPT — 1 CLICK'; }, 6000); }
-
-  btn.addEventListener('click', async () => {
-    if (!full){ hint.textContent = 'source still loading — one moment'; return; }
-    try {                                   // modern path
-      await navigator.clipboard.writeText(full);
-      ok(); return;
-    } catch (e) {}
-    try {                                   // legacy webview path
-      const ta = document.createElement('textarea');
-      ta.value = full; ta.style.position = 'fixed'; ta.style.opacity = '0';
-      document.body.appendChild(ta); ta.select();
-      const done = document.execCommand('copy');
-      document.body.removeChild(ta);
-      if (done){ ok(); return; }
-    } catch (e) {}
-    const rng = document.createRange(); rng.selectNodeContents(pre);  // last resort
-    const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(rng);
-    hint.textContent = 'auto-copy blocked here — the code is selected, press Ctrl+C / long-press → Copy';
-  });
+  function wire(btnId, hintId, preId, charsId, linesId, url, okText){
+    const btn = document.getElementById(btnId);
+    const hint = document.getElementById(hintId);
+    const pre = document.getElementById(preId);
+    const defText = btn.textContent;
+    let full = '';
+    fetch(url).then(r => r.text()).then(t => {
+      full = t;
+      pre.textContent = t;
+      document.getElementById(charsId).textContent =
+        new Intl.NumberFormat().format(t.length) + ' characters';
+      document.getElementById(linesId).textContent =
+        new Intl.NumberFormat().format(t.split('\n').length) + ' lines';
+    }).catch(() => { pre.textContent = 'could not load source — refresh the page'; });
+    function ok(){ btn.classList.add('ok'); btn.textContent = okText;
+      hint.textContent = 'TradingView → Pine Editor → paste → Save → Add to chart';
+      setTimeout(() => { btn.classList.remove('ok'); btn.textContent = defText; }, 6000); }
+    btn.addEventListener('click', async () => {
+      if (!full){ hint.textContent = 'source still loading — one moment'; return; }
+      try { await navigator.clipboard.writeText(full); ok(); return; } catch (e) {}
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = full; ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.select();
+        const done = document.execCommand('copy');
+        document.body.removeChild(ta);
+        if (done){ ok(); return; }
+      } catch (e) {}
+      const rng = document.createRange(); rng.selectNodeContents(pre);
+      const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(rng);
+      hint.textContent = 'auto-copy blocked here — the code is selected, press Ctrl+C / long-press → Copy';
+    });
+  }
+  wire('copyBtn1', 'hint1', 'src1', 'mchars1', 'mlines1', '/pine',
+       '✅ COPIED — NOW PASTE IT IN THE PINE EDITOR');
+  wire('copyBtn2', 'hint2', 'src2', 'mchars2', 'mlines2', '/pine2',
+       '✅ COPIED — NOW PASTE IT IN THE PINE EDITOR');
 })();
 </script>
 </body>

@@ -26,8 +26,7 @@
 //  beside them and see which zones deserve your trust.
 // ============================================================================
 indicator("XAUUSD PROOF [Self-Proving Zones]", overlay = true,
-     max_boxes_count = 500, max_labels_count = 50, max_lines_count = 50,
-     max_tables_count = 1)
+     max_boxes_count = 500, max_labels_count = 50, max_lines_count = 50)
 
 // ---- inputs: detection ------------------------------------------------------
 grpD = "Zone detection"

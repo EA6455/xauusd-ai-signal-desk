@@ -78,8 +78,15 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "10.17"
+SYSTEM_VERSION = "10.18"
 SYSTEM_CHANGELOG = {
+    "10.18": [
+        "PROOF compile fix: the script used an indicator() argument that "
+        "does not exist in Pine (max_tables_count) \u2014 the Pine editor "
+        "refused to compile it. Argument removed; all other indicators "
+        "audited and clean. Members: re-copy PROOF from the website or "
+        "the FIXED parts in the INDICATOR topic",
+    ],
     "10.17": [
         "PROOF indicator fix: the scoreboard no longer merges table "
         "cells \u2014 the merge operation raised a runtime error when the "

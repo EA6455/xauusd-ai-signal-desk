@@ -78,8 +78,13 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "2.9.4"
+SYSTEM_VERSION = "2.9.5"
 SYSTEM_CHANGELOG = {
+    "2.9.5": [
+        "ONE price space: the MTF matrix card and the AI trader brief now "
+        "use the same spot-aligned candles as the chart — every level on "
+        "the desk matches TradingView's price space",
+    ],
     "2.9.4": [
         "Prices now MATCH TradingView: the level anchors to TradingView's "
         "own spot feed (OANDA:XAUUSD via their public scanner, polled "
@@ -2889,6 +2894,10 @@ def _ai_trader_brief():
     except Exception:  # noqa: BLE001
         spot = None
     spot = float(spot or c15[-1]["c"])
+    # every bar and zone in the brief lives in spot space (like the chart)
+    c15, _a15 = _align_to_spot(c15, spot)
+    c60, _a60 = _align_to_spot(c60, spot)
+    c1d, _a1d = _align_to_spot(c1d, spot)
     trs = []
     for i in range(len(c15) - 15, len(c15) - 1):
         h, l, pc = (float(c15[i]["h"]), float(c15[i]["l"]),
@@ -3297,6 +3306,22 @@ def ai_trader(force=False, auto=False):
 # 8/8 A+ to know what the desk sees. Every alert carries the age of the
 # last closed bar so freshness is provable.
 
+def _align_to_spot(cl, spot):
+    """Shift raw (futures-space) candles onto the spot level — the same
+    instantaneous adjust the main chart uses, so every TF, zone level
+    and AI-trader number lives in ONE price space (spot, matching
+    TradingView). Returns (aligned_candles, adjust)."""
+    if not cl or not spot:
+        return cl, 0.0
+    adj = float(cl[-1]["c"]) - float(spot)
+    if not (0 < adj < 150):            # sanity: normal contango only
+        return cl, 0.0
+    out = [dict(t=k["t"], o=float(k["o"]) - adj, h=float(k["h"]) - adj,
+                l=float(k["l"]) - adj, c=float(k["c"]) - adj)
+           for k in cl]
+    return out, adj
+
+
 MTF_TFS = ["15m", "60m", "2h", "4h", "1d"]
 MTF_TREND = {1: "BULL", -1: "BEAR", 0: "RANGE"}
 _mtf_mem = dict(lastAlerts={}, lastGlobal=0.0, lastScan=None)
@@ -3317,6 +3342,7 @@ def _mtf_scan():
             cl = []
         if len(cl) < 220:
             continue
+        cl, _adj = _align_to_spot(cl, spot)     # ONE price space: spot
         try:
             pack = entries._snr_pack(cl)
         except Exception:  # noqa: BLE001

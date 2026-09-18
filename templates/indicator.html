@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XAUUSD SNR Desk · TradingView Indicator</title>
+<style>
+  :root{ --bg:#070a10; --card:#101624; --border:#1b2536; --text:#e9edf5;
+    --muted:#8b95a8; --gold:#eab54f; --green:#26d36f; --cyan:#22d3ee; }
+  *{box-sizing:border-box; margin:0; padding:0}
+  html,body{background:
+      radial-gradient(900px 420px at 12% -6%, rgba(34,211,238,.07), transparent 60%),
+      radial-gradient(1100px 500px at 88% -10%, rgba(234,181,79,.06), transparent 55%),
+      var(--bg);
+    color:var(--text); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Inter,sans-serif;
+    font-size:15px; -webkit-font-smoothing:antialiased}
+  .wrap{max-width:980px; margin:0 auto; padding:26px 18px 60px}
+  .brand{font-size:21px; font-weight:800; letter-spacing:.3px; margin-bottom:4px;
+    background:linear-gradient(92deg,#fde9c0 0%, var(--gold) 38%, var(--cyan) 100%);
+    -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent}
+  .sub{color:var(--muted); font-size:12.5px; letter-spacing:2.5px; text-transform:uppercase; margin-bottom:26px}
+  .card{border-radius:14px; border:1px solid rgba(88,116,168,.34); padding:20px;
+    background:linear-gradient(158deg, rgba(18,25,41,.86), rgba(10,14,24,.92));
+    backdrop-filter:blur(12px); box-shadow:inset 0 1px 0 rgba(34,211,238,.14), 0 20px 54px -26px rgba(0,0,0,.85);
+    margin-bottom:18px}
+  h1{font-size:19px; letter-spacing:1.2px; text-transform:uppercase; margin-bottom:8px}
+  h1 .au{color:var(--gold)}
+  p{color:var(--muted); line-height:1.55; font-size:14px}
+  .steps{counter-reset:s; list-style:none; margin-top:12px}
+  .steps li{counter-increment:s; position:relative; padding:7px 0 7px 40px; color:var(--text); font-size:14px}
+  .steps li::before{content:counter(s); position:absolute; left:0; top:6px; width:26px; height:26px;
+    border-radius:8px; border:1px solid rgba(34,211,238,.5); color:var(--cyan);
+    display:flex; align-items:center; justify-content:center; font-weight:800; font-size:13px}
+  .steps small{display:block; color:var(--muted)}
+  .copybtn{display:block; width:100%; cursor:pointer; border:1px solid rgba(234,181,79,.6);
+    background:linear-gradient(92deg, rgba(234,181,79,.16), rgba(34,211,238,.12));
+    color:#ffe9b8; border-radius:12px; padding:16px; font-size:16.5px; font-weight:800;
+    letter-spacing:1.2px; transition:.2s; text-shadow:0 0 14px rgba(234,181,79,.5)}
+  .copybtn:hover{transform:translateY(-1px); box-shadow:0 0 30px -8px rgba(234,181,79,.7); border-color:var(--gold)}
+  .copybtn.ok{border-color:var(--green); color:#c9f7dd;
+    background:linear-gradient(92deg, rgba(38,211,111,.18), rgba(34,211,238,.10))}
+  .hint{margin-top:9px; text-align:center; color:var(--muted); font-size:12.5px; min-height:16px}
+  .meta{display:flex; gap:14px; flex-wrap:wrap; color:var(--muted); font-size:12px; margin-top:6px}
+  pre#src{margin-top:14px; max-height:420px; overflow:auto; border-radius:10px;
+    border:1px solid var(--border); background:#0a0e17; padding:14px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px;
+    line-height:1.5; color:#c8d6ec; white-space:pre; user-select:all}
+  pre#src::selection, pre#src *::selection{background:rgba(34,211,238,.35)}
+  a{color:var(--cyan)}
+  .row{display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin-top:14px}
+  .tvlink{font-size:13px; font-weight:700; color:var(--cyan); text-decoration:none;
+    border:1px solid var(--border); border-radius:9px; padding:8px 13px}
+  .tvlink:hover{border-color:var(--cyan); box-shadow:0 0 20px -8px rgba(34,211,238,.8)}
+  .loading{color:var(--muted); font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand">XAUUSD SNR DESK</div>
+  <div class="sub">TradingView Indicator · A+ only</div>
+
+  <div class="card">
+    <h1>📋 <span class="au">One-Click Copy</span> — Pine Script</h1>
+    <p>The desk's exact SNR engine for your TradingView chart. Signals only at
+       <b style="color:var(--green)">A+ (8/8 checks)</b> — never B or C. BUY and SELL sides,
+       levels TP1 0.75R / runner 1.5R, same as the cards posted in the group.</p>
+    <button class="copybtn" id="copyBtn">📋 COPY FULL SCRIPT — 1 CLICK</button>
+    <div class="hint" id="hint">copies the whole script to your clipboard, ready to paste</div>
+    <div class="meta"><span id="mchars">…</span><span id="mlines">…</span>
+      <span>source of truth: this desk updates it automatically</span></div>
+  </div>
+
+  <div class="card">
+    <h1>⚡ Install — 2 minutes</h1>
+    <ol class="steps">
+      <li>Tap <b>COPY FULL SCRIPT</b> above <small>the entire Pine Script is now in your clipboard</small></li>
+      <li>Open TradingView → XAUUSD → <b>15-minute chart</b>
+          <small><a href="https://www.tradingview.com/chart/?symbol=OANDA%3AXAUUSD" target="_blank" rel="noopener">open the chart ↗</a></small></li>
+      <li>Open <b>Pine Editor</b> (bottom bar) → paste → <b>Save</b> → <b>Add to chart</b>
+          <small>delete any demo code in the editor before pasting</small></li>
+      <li>Set alerts: condition = this indicator → <b>"A+ BUY setup"</b> / <b>"A+ SELL setup"</b>
+          <small>TradingView pushes them to your phone the same moment the desk posts its card</small></li>
+    </ol>
+    <div class="row">
+      <a class="tvlink" href="https://www.tradingview.com/chart/?symbol=OANDA%3AXAUUSD" target="_blank" rel="noopener">Open XAUUSD chart ↗</a>
+      <a class="tvlink" href="/" style="color:var(--gold); border-color:rgba(234,181,79,.45)">← Back to the desk</a>
+    </div>
+  </div>
+
+  <div class="card">
+    <h1>📜 Source <span style="color:var(--muted); font-size:12px; letter-spacing:1px">(reference — the button above copies it all)</span></h1>
+    <pre id="src"><span class="loading">loading source…</span></pre>
+  </div>
+</div>
+
+<script>
+(() => {
+  const btn = document.getElementById('copyBtn');
+  const hint = document.getElementById('hint');
+  const pre = document.getElementById('src');
+  let full = '';
+  fetch('/pine').then(r => r.text()).then(t => {
+    full = t;
+    pre.textContent = t;
+    document.getElementById('mchars').textContent =
+      new Intl.NumberFormat().format(t.length) + ' characters';
+    document.getElementById('mlines').textContent =
+      new Intl.NumberFormat().format(t.split('\n').length) + ' lines';
+  }).catch(() => { pre.textContent = 'could not load source — refresh the page'; });
+
+  function ok(){ btn.classList.add('ok');
+    btn.textContent = '✅ COPIED — NOW PASTE IT IN THE PINE EDITOR';
+    hint.textContent = 'TradingView → XAUUSD 15m → Pine Editor → paste → Save → Add to chart';
+    setTimeout(() => { btn.classList.remove('ok');
+      btn.textContent = '📋 COPY FULL SCRIPT — 1 CLICK'; }, 6000); }
+
+  btn.addEventListener('click', async () => {
+    if (!full){ hint.textContent = 'source still loading — one moment'; return; }
+    try {                                   // modern path
+      await navigator.clipboard.writeText(full);
+      ok(); return;
+    } catch (e) {}
+    try {                                   // legacy webview path
+      const ta = document.createElement('textarea');
+      ta.value = full; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      const done = document.execCommand('copy');
+      document.body.removeChild(ta);
+      if (done){ ok(); return; }
+    } catch (e) {}
+    const rng = document.createRange(); rng.selectNodeContents(pre);  // last resort
+    const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(rng);
+    hint.textContent = 'auto-copy blocked here — the code is selected, press Ctrl+C / long-press → Copy';
+  });
+})();
+</script>
+</body>
+</html>

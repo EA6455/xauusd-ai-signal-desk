@@ -78,8 +78,15 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "10.4"
+SYSTEM_VERSION = "10.5"
 SYSTEM_CHANGELOG = {
+    "10.5": [
+        "One-click copy for the TradingView indicator on the website: "
+        "/indicator is a dedicated page where members press one button "
+        "and the entire A+ only Pine Script lands in their clipboard, "
+        "with the 4-step install guide and live source — no manual "
+        "selecting, no scrolling through Telegram parts",
+    ],
     "10.4": [
         "The TradingView indicator source now posts itself to the "
         "group's INDICATOR [TRADING VIEW] topic — members get the "
@@ -4252,12 +4259,14 @@ def _announce_indicator():
         "\u2022 zones, structure, 8-check grading \u2014 signals only at A+ (8/8)\n"
         "\u2022 SELL signals included (engine sees both sides)\n"
         "\u2022 levels: half off at TP1 0.75R, stop to breakeven, runner 1.5R\n\n"
-        "HOW TO INSTALL (2 minutes):\n"
-        "1. TradingView \u2192 XAUUSD \u2192 15-minute chart\n"
-        "2. Pine Editor (bottom bar) \u2192 paste ALL parts below in order\n"
-        "3. Save \u2192 Add to chart\n"
-        "4. Alerts \u2192 Condition: this indicator \u2192 'A+ BUY setup' / "
-        "'A+ SELL setup'\n\n"
+        "HOW TO INSTALL (2 minutes) \u2014 EASIEST: open the desk \u2192 "
+        "SNR Entry card \u2192 \U0001F4CB TV INDICATOR \u2192 one button copies "
+        "the whole script.\n"
+        "Or from here: TradingView \u2192 XAUUSD \u2192 15m chart \u2192 Pine "
+        "Editor \u2192 paste ALL parts below in order \u2192 Save \u2192 Add to "
+        "chart.\n"
+        "Alerts \u2192 condition: this indicator \u2192 'A+ BUY setup' / "
+        "'A+ SELL setup'.\n\n"
         f"Source below in parts \u2014 paste them as ONE script.", tid)
     parts, buf, size = [], [], 0
     for line in pine.split("\n"):
@@ -5358,6 +5367,13 @@ def _ai_trader_payload(sig=None):
                    trades=(STATE.get("aiTrades") or [])[:8],
                    stats=_ai_trader_stats(),
                    council=_ai_council_stats())
+
+
+@app.route("/indicator")
+def indicator_page():
+    """One-click copy page for the TradingView Pine Script — members
+    press one button and the whole indicator is in their clipboard."""
+    return render_template("indicator.html")
 
 
 @app.route("/pine")

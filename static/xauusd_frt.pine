@@ -1,84 +1,141 @@
 //@version=5
 // ============================================================================
-//  XAUUSD FRT  ·  ZONE HEALTH SCOUT  —  the desk's THIRD indicator
+//  XAUUSD FRT  ·  ZONE HEALTH SCOUT  —  the desk's THIRD indicator (buffed)
 //
-//  ONLY BOXES. No signals, no alerts, no dashboard, no noise.
-//  Every institutional zone is scouted, labeled and health-tracked:
+//  ONLY BOXES. No signals, no dashboard. Pure zone health, now with a full
+//  option set:
 //     · FRESH  solid box, full color  — untested zone, full power
-//     · TESTED dashed box, faded      — one retest absorbed
+//     · TESTED dashed box, faded      — retest(s) absorbed
 //     · WEAK   gray box               — consumed, break watch
-//     · gone   box deleted            — the zone broke
+//     · gone   box deleted (+ ✕ mark) — the zone broke
+//
+//  OPTIONS: show/hide each state, demand/supply filters, touch counts,
+//  zone age, high-volume (HV) institutional tags, 50% equilibrium
+//  midlines, break markers, adjustable WEAK threshold, zone caps,
+//  custom colors, optional zone-STATE alerts (health events, not signals).
 //
 //  NO REPAINT — GUARANTEED BY DESIGN:
-//     · zones are born only from CONFIRMED pivots (k bars later), so a
-//       box never appears at a bar earlier than its own confirmation
-//     · top, bottom and left edge are FIXED at creation — a box never
-//       moves, never resizes, never redraws
-//     · state changes (FRESH → TESTED → WEAK) are evaluated on CLOSED
-//       bars only (barstate.isconfirmed) — nothing flickers intrabar
+//     · zones are born only from CONFIRMED pivots (k bars later)
+//     · top, bottom and left edge are FIXED at creation — never move
+//     · state changes, break marks and alerts evaluate on CLOSED bars
+//       only (barstate.isconfirmed)
 //     · a broken or expired box is deleted, never resurrected
-//
-//  Use it to READ the market: trade fresh zones with your own strategy,
-//  treat tested zones with caution, expect weak zones to break.
-//  Pair with indicator № 1 (A+ SNIPER) and № 2 (FLOW) for the signals.
 // ============================================================================
 indicator("XAUUSD FRT [Zone Health Scout]", overlay = true,
-     max_boxes_count = 500)
+     max_boxes_count = 500, max_labels_count = 100, max_lines_count = 200)
 
-// ---- inputs ----------------------------------------------------------------
-kSwing  = input.int(3,     "Swing strength (bars each side) — 3 = precise scout · 2 = more boxes", minval = 2, maxval = 10)
-impAtr  = input.float(1.8, "Impulse: min ATR multiple",  minval = 0.5, step = 0.1)
-zoneAtr = input.float(2.0, "Max zone height (ATR)",      minval = 0.5, step = 0.1)
-slBuf   = input.float(0.15, "Break buffer beyond zone (ATR)", minval = 0.0, step = 0.05)
-showSess = input.bool(true, "Shade dead session (21:00-01:00 UTC)")
+// ---- inputs: detection ------------------------------------------------------
+grpD = "Zone detection"
+kSwing  = input.int(3,     "Swing strength (bars each side) — 3 precise · 2 more boxes", minval = 2, maxval = 10, group = grpD)
+impAtr  = input.float(1.8, "Impulse: min ATR multiple",  minval = 0.5, step = 0.1, group = grpD)
+zoneAtr = input.float(2.0, "Max zone height (ATR)",      minval = 0.5, step = 0.1, group = grpD)
+slBuf   = input.float(0.15, "Break buffer beyond zone (ATR)", minval = 0.0, step = 0.05, group = grpD)
+weakAfter = input.int(2,   "Touches before WEAK",        minval = 2, maxval = 5, group = grpD)
+maxZones  = input.int(30,  "Max zones on chart (oldest removed)", minval = 5, maxval = 60, group = grpD)
+maxAge    = input.int(500, "Zone expiry (bars)",         minval = 50, maxval = 2000, group = grpD)
 
-// ---- basics -----------------------------------------------------------------
+// ---- inputs: display ---------------------------------------------------------
+grpV = "Display"
+showFRESH  = input.bool(true, "Show FRESH zones",  group = grpV)
+showTESTED = input.bool(true, "Show TESTED zones", group = grpV)
+showWEAK   = input.bool(true, "Show WEAK zones",   group = grpV)
+showDemand = input.bool(true, "Show demand zones (green)", group = grpV)
+showSupply = input.bool(true, "Show supply zones (red)",   group = grpV)
+showTouchCount = input.bool(true, "Show touch count — TESTED (1) / WEAK (3)", group = grpV)
+showAge   = input.bool(false, "Show zone age at last state change — · 2d / · 6h", group = grpV)
+showHV    = input.bool(true,  "Tag high-volume institutional zones — · HV", group = grpV)
+showMid   = input.bool(false, "Draw 50% equilibrium midline in each zone", group = grpV)
+showBreaks = input.bool(true, "Mark ✕ where a zone breaks", group = grpV)
+extendBars = input.int(6,     "Extend boxes right (bars)", minval = 0, maxval = 40, group = grpV)
+bullColor = input.color(color.green, "Demand color", group = grpV)
+bearColor = input.color(color.red,   "Supply color", group = grpV)
+showSess  = input.bool(true, "Shade dead session (21:00-01:00 UTC)", group = grpV)
+
+// ---- inputs: state alerts (health events, NOT signals) ------------------------
+grpA = "Zone state alerts (optional)"
+enableAlerts = input.bool(false, "Enable zone-STATE alerts (tested / weak / broken — no trade signals)", group = grpA)
+
+// ---- basics -------------------------------------------------------------------
 atr = ta.atr(14)
+volSma = ta.sma(volume, 20)
 hr  = hour(time, "UTC")
 sessDead = hr >= 21 or hr < 1
 bgcolor(showSess and sessDead ? color.new(color.gray, 94) : na)
 
-// ---- swings ------------------------------------------------------------------
+f_ageStr(bars) =>
+    secs = timeframe.in_seconds()
+    tot = bars * secs
+    tot >= 86400 ? str.tostring(tot / 86400, "#") + "d" : str.tostring(tot / 3600, "#") + "h"
+
+// ---- swings --------------------------------------------------------------------
 ph = ta.pivothigh(high, kSwing, kSwing)
 pl = ta.pivotlow(low,  kSwing, kSwing)
 
-// unpaired swing storage (waiting for their opposing swing to confirm)
 var loIdx = array.new_int(0)
 var loVal = array.new_float(0)
 var loAtr = array.new_float(0)
 var loTop = array.new_float(0)
 var loBot = array.new_float(0)
-var loPriorHi = array.new_float(0)
 var hiIdx = array.new_int(0)
 var hiVal = array.new_float(0)
 var hiAtr = array.new_float(0)
 var hiTop = array.new_float(0)
 var hiBot = array.new_float(0)
-var hiPriorLo = array.new_float(0)
 
-// newest confirmed swings (for prior-swing references)
-var int   h1i = -1
+var int h1i = -1
 var float h1v = na
-var int   h2i = -1
-var float h2v = na
-var int   l1i = -1
-var float l1v = na
-var int   l2i = -1
-var float l2v = na
 
-// live zones (parallel arrays) — zTouches drives the health state
+// live zones
 var zTop = array.new_float(0)
 var zBot = array.new_float(0)
-var zSide = array.new_int(0)        // +1 demand, -1 supply
-var zTouches = array.new_int(0)     // 0 FRESH · 1 TESTED · 2+ WEAK
+var zSide = array.new_int(0)
+var zTouches = array.new_int(0)
 var zCreated = array.new_int(0)
+var zLeft = array.new_int(0)
+var zHV = array.new_int(0)
 var zBox = array.new_box(0)
+var zMid = array.new_line(0)
+var bMarks = array.new_label(0)
 
-// ---- pivot processing --------------------------------------------------------
+// per-bar alert flags (set inside the confirmed-bar engine)
+bool alTested = false
+bool alWeak = false
+bool alBroken = false
+
+f_makeZone(sIdx, sTop, sBot, side) =>
+    // high-volume institutional base?
+    baseVol = (volume[kSwing] + volume[kSwing + 1] + volume[kSwing + 2]) / 3
+    hv = showHV and baseVol > 1.5 * volSma[kSwing] ? 1 : 0
+    // cap: drop the oldest zone
+    if array.size(zTop) >= maxZones
+        box.delete(array.get(zBox, 0))
+        line.delete(array.get(zMid, 0))
+        array.remove(zTop, 0)
+        array.remove(zBot, 0)
+        array.remove(zSide, 0)
+        array.remove(zTouches, 0)
+        array.remove(zCreated, 0)
+        array.remove(zLeft, 0)
+        array.remove(zHV, 0)
+        array.remove(zBox, 0)
+        array.remove(zMid, 0)
+    zc = side == 1 ? bullColor : bearColor
+    sideVis = side == 1 ? showDemand : showSupply
+    array.push(zTop, sTop)
+    array.push(zBot, sBot)
+    array.push(zSide, side)
+    array.push(zTouches, 0)
+    array.push(zCreated, bar_index)
+    array.push(zLeft, sIdx)
+    array.push(zHV, hv)
+    bx = showFRESH and sideVis ? box.new(sIdx, sTop, bar_index + extendBars, sBot, border_color = color.new(zc, 30), bgcolor = color.new(zc, 82), border_width = 1, text = hv == 1 ? "FRESH · HV" : "FRESH", text_color = color.new(zc, 5), text_size = size.tiny) : box(na)
+    array.push(zBox, bx)
+    ml = showMid and sideVis ? line.new(sIdx, (sTop + sBot) / 2, bar_index + extendBars, (sTop + sBot) / 2, color = color.new(zc, 55), style = line.style_dotted, width = 1) : line(na)
+    array.push(zMid, ml)
+
+// ---- pivot processing -----------------------------------------------------------
 if not na(ph) and bar_index > kSwing + 2
     pi = bar_index - kSwing
-    h2i := h1i
-    h2v := h1v
     h1i := pi
     h1v := ph
     bTop = math.max(high[kSwing], math.max(high[kSwing + 1], high[kSwing + 2]))
@@ -88,8 +145,6 @@ if not na(ph) and bar_index > kSwing + 2
     array.push(hiAtr, atr[kSwing])
     array.push(hiTop, bTop)
     array.push(hiBot, bBot)
-    array.push(hiPriorLo, l1v)
-    // pair every unpaired swing LOW with this, its first following high
     if array.size(loIdx) > 0
         for i = array.size(loIdx) - 1 to 0
             sIdx = array.get(loIdx, i)
@@ -106,25 +161,15 @@ if not na(ph) and bar_index > kSwing + 2
                             dup := true
                             break
                 if not dup
-                    array.push(zTop, sTop)
-                    array.push(zBot, sBot)
-                    array.push(zSide, 1)
-                    array.push(zTouches, 0)
-                    array.push(zCreated, bar_index)
-                    array.push(zBox, box.new(sIdx, sTop, bar_index + 6, sBot, border_color = color.new(color.green, 30), bgcolor = color.new(color.green, 82), border_width = 1, text = "FRESH", text_color = color.new(color.green, 5), text_size = size.tiny))
+                    f_makeZone(sIdx, sTop, sBot, 1)
             array.remove(loIdx, i)
             array.remove(loVal, i)
             array.remove(loAtr, i)
             array.remove(loTop, i)
             array.remove(loBot, i)
-            array.remove(loPriorHi, i)
 
 if not na(pl) and bar_index > kSwing + 2
     pi = bar_index - kSwing
-    l2i := l1i
-    l2v := l1v
-    l1i := pi
-    l1v := pl
     bTop = math.max(high[kSwing], math.max(high[kSwing + 1], high[kSwing + 2]))
     bBot = math.min(low[kSwing],  math.min(low[kSwing + 1],  low[kSwing + 2]))
     array.push(loIdx, pi)
@@ -132,8 +177,6 @@ if not na(pl) and bar_index > kSwing + 2
     array.push(loAtr, atr[kSwing])
     array.push(loTop, bTop)
     array.push(loBot, bBot)
-    array.push(loPriorHi, h1v)
-    // pair every unpaired swing HIGH with this, its first following low
     if array.size(hiIdx) > 0
         for i = array.size(hiIdx) - 1 to 0
             sIdx = array.get(hiIdx, i)
@@ -150,20 +193,14 @@ if not na(pl) and bar_index > kSwing + 2
                             dup := true
                             break
                 if not dup
-                    array.push(zTop, sTop)
-                    array.push(zBot, sBot)
-                    array.push(zSide, -1)
-                    array.push(zTouches, 0)
-                    array.push(zCreated, bar_index)
-                    array.push(zBox, box.new(sIdx, sTop, bar_index + 6, sBot, border_color = color.new(color.red, 30), bgcolor = color.new(color.red, 82), border_width = 1, text = "FRESH", text_color = color.new(color.red, 5), text_size = size.tiny))
+                    f_makeZone(sIdx, sTop, sBot, -1)
             array.remove(hiIdx, i)
             array.remove(hiVal, i)
             array.remove(hiAtr, i)
             array.remove(hiTop, i)
             array.remove(hiBot, i)
-            array.remove(hiPriorLo, i)
 
-// ---- zone health engine — CLOSED BARS ONLY (strict no-repaint) ---------------
+// ---- zone health engine — CLOSED BARS ONLY (strict no-repaint) ------------------
 if barstate.isconfirmed and array.size(zTop) > 0
     for zi = array.size(zTop) - 1 to 0
         s = array.get(zSide, zi)
@@ -171,36 +208,70 @@ if barstate.isconfirmed and array.size(zTop) > 0
         zb = array.get(zBot, zi)
         old = bar_index - array.get(zCreated, zi)
         broken = s == 1 ? low < zb - slBuf * atr : high > zt + slBuf * atr
-        if broken or old > 500
+        if broken or old > maxAge
+            if broken and showBreaks
+                bP = s == 1 ? zb : zt
+                array.push(bMarks, label.new(bar_index, bP, "\u2715", style = label.style_none, color = color.new(color.gray, 100), textcolor = color.new(color.gray, 20), size = size.tiny))
+                if array.size(bMarks) > 40
+                    label.delete(array.get(bMarks, 0))
+                    array.remove(bMarks, 0)
+            if broken
+                alBroken := true
             box.delete(array.get(zBox, zi))
+            line.delete(array.get(zMid, zi))
             array.remove(zTop, zi)
             array.remove(zBot, zi)
             array.remove(zSide, zi)
             array.remove(zTouches, zi)
             array.remove(zCreated, zi)
+            array.remove(zLeft, zi)
+            array.remove(zHV, zi)
             array.remove(zBox, zi)
+            array.remove(zMid, zi)
         else
             if not na(array.get(zBox, zi))
-                box.set_right(array.get(zBox, zi), bar_index + 6)
+                box.set_right(array.get(zBox, zi), bar_index + extendBars)
+            if not na(array.get(zMid, zi))
+                line.set_x2(array.get(zMid, zi), bar_index + extendBars)
             touching = s == 1 ? (low <= zt and close >= zb) : (high >= zb and close <= zt)
             if touching
                 tN = array.get(zTouches, zi) + 1
                 array.set(zTouches, zi, tN)
+                isWeak = tN >= weakAfter
+                if tN == 1
+                    alTested := true
+                if isWeak
+                    alWeak := true
+                zc = s == 1 ? bullColor : bearColor
+                sideVis = s == 1 ? showDemand : showSupply
+                stateVis = isWeak ? showWEAK : showTESTED
                 bxh = array.get(zBox, zi)
-                if not na(bxh)
-                    zc = s == 1 ? color.green : color.red
-                    if tN == 1
-                        box.set_text(bxh, "TESTED")
-                        box.set_text_color(bxh, color.new(zc, 25))
-                        box.set_border_style(bxh, line.style_dashed)
-                        box.set_bgcolor(bxh, color.new(zc, 92))
+                if stateVis and sideVis
+                    txt = (isWeak ? "WEAK" : "TESTED")
+                    txt += showTouchCount ? " (" + str.tostring(tN) + ")" : ""
+                    txt += array.get(zHV, zi) == 1 ? " · HV" : ""
+                    txt += showAge ? " · " + f_ageStr(bar_index - array.get(zCreated, zi)) : ""
+                    if na(bxh)
+                        array.set(zBox, zi, box.new(array.get(zLeft, zi), zt, bar_index + extendBars, zb, border_color = isWeak ? color.new(color.gray, 45) : color.new(zc, 35), bgcolor = isWeak ? color.new(zc, 95) : color.new(zc, 92), border_width = 1, border_style = isWeak ? line.style_solid : line.style_dashed, text = txt, text_color = isWeak ? color.new(color.gray, 15) : color.new(zc, 25), text_size = size.tiny))
                     else
-                        box.set_text(bxh, "WEAK")
-                        box.set_text_color(bxh, color.new(color.gray, 15))
-                        box.set_border_color(bxh, color.new(color.gray, 45))
-                        box.set_bgcolor(bxh, color.new(zc, 95))
+                        box.set_text(bxh, txt)
+                        box.set_text_color(bxh, isWeak ? color.new(color.gray, 15) : color.new(zc, 25))
+                        box.set_border_style(bxh, line.style_dashed)
+                        if isWeak
+                            box.set_border_color(bxh, color.new(color.gray, 45))
+                            box.set_bgcolor(bxh, color.new(zc, 95))
+                        else
+                            box.set_bgcolor(bxh, color.new(zc, 92))
+                else
+                    if not na(bxh)
+                        box.delete(bxh)
+                        array.set(zBox, zi, box(na))
+                    mln = array.get(zMid, zi)
+                    if not na(mln)
+                        line.delete(mln)
+                        array.set(zMid, zi, line(na))
 
-// ---- pruning of unpaired pivots ----------------------------------------------
+// ---- pruning of unpaired pivots --------------------------------------------------
 if array.size(loIdx) > 0
     for i = array.size(loIdx) - 1 to 0
         if bar_index - array.get(loIdx, i) > 200
@@ -209,7 +280,6 @@ if array.size(loIdx) > 0
             array.remove(loAtr, i)
             array.remove(loTop, i)
             array.remove(loBot, i)
-            array.remove(loPriorHi, i)
 if array.size(hiIdx) > 0
     for i = array.size(hiIdx) - 1 to 0
         if bar_index - array.get(hiIdx, i) > 200
@@ -218,4 +288,8 @@ if array.size(hiIdx) > 0
             array.remove(hiAtr, i)
             array.remove(hiTop, i)
             array.remove(hiBot, i)
-            array.remove(hiPriorLo, i)
+
+// ---- optional zone-STATE alerts (health events — NOT trade signals) ---------------
+alertcondition(enableAlerts and alTested,  "Zone TESTED",   "FRT: a FRESH zone just absorbed its first retest — now TESTED")
+alertcondition(enableAlerts and alWeak,    "Zone WEAK",     "FRT: a zone has been consumed — now WEAK, expect a break")
+alertcondition(enableAlerts and alBroken,  "Zone BROKEN",   "FRT: a zone broke — price moved through it")

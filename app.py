@@ -78,8 +78,18 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "10.13"
+SYSTEM_VERSION = "10.14"
 SYSTEM_CHANGELOG = {
+    "10.14": [
+        "FRT TradingView indicator buffed with a full option set (16 "
+        "inputs, still boxes-only and strictly non-repainting): show/hide "
+        "FRESH/TESTED/WEAK individually, demand/supply filters, touch "
+        "counts in the label, zone age, high-volume HV institutional "
+        "tags, 50% equilibrium midlines, \u2715 break markers, adjustable "
+        "WEAK threshold, max-zones and expiry caps, extend margin, "
+        "custom colors, and optional zone-state alerts (tested/weak/"
+        "broken \u2014 health events, not trade signals, off by default)",
+    ],
     "10.13": [
         "THIRD TradingView indicator: FRT [Zone Health Scout] — FRESH, "
         "TESTED and WEAK zone boxes and nothing else. No signals, no "
@@ -4409,9 +4419,14 @@ def _announce_indicator():
         "\U0001F9ED INDICATOR \u2116 3 \u00b7 FRT [Zone Health Scout] \u2014 "
         "boxes only\n\n"
         "FRESH \u00b7 TESTED \u00b7 WEAK zone boxes, nothing else: no signals, "
-        "no alerts, no dashboard. Strictly NO REPAINT \u2014 zones are born "
-        "from confirmed pivots, edges are fixed forever, and state "
-        "changes are evaluated on closed bars only.\n"
+        "no dashboard. Strictly NO REPAINT \u2014 zones are born from "
+        "confirmed pivots, edges are fixed forever, and state changes "
+        "are evaluated on closed bars only.\n"
+        "16 options: show/hide each state, demand/supply filters, touch "
+        "counts, zone age, high-volume \u00b7 HV institutional tags, 50% "
+        "equilibrium midlines, \u2715 break markers, adjustable WEAK "
+        "threshold, zone caps, custom colors, and optional zone-STATE "
+        "alerts (health events, not signals).\n"
         "Use it to READ the market: solid FRESH boxes = untested power, "
         "dashed TESTED = caution, gray WEAK = expect a break. Pair with "
         "\u2116 1 (A+ SNIPER) and \u2116 2 (FLOW) for the signals.\n"

@@ -78,8 +78,18 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "10.1"
+SYSTEM_VERSION = "10.2"
 SYSTEM_CHANGELOG = {
+    "10.2": [
+        "Strategy update — exit profile promoted to 0.75:1.5 (from 1:2): "
+        "two independent studies agree the tighter first target wins more "
+        "often at the same profit (A+ backtest 80% vs 67% win, +0.40R vs "
+        "+0.33R; research challenger on the delta cohort 100% vs 92%). "
+        "Half off at 0.75R, stop to breakeven, runner to 1.5R. The "
+        "engine's regime data was checked too — its 8-check grading "
+        "already filters counter-trend setups, so no extra gate was added "
+        "where the data didn't support one",
+    ],
     "10.1": [
         "FUTURE update: the desk now tells you where it thinks price is "
         "going — a new AI Council Forecast panel projects the next 1h "
@@ -799,9 +809,10 @@ def maybe_setup_alert(ent, elite_stats=None):
     """Fire an alert on SNR retests, once per ZONE+GRADE (a setup that stays
     live for hours must not re-alert every 15 minutes).
 
-    v3 gating (1:2 RR backtest): phone cards only for the DELTA-CONFIRMED
-    cohort — (A+ or A+/B+ continuation zone, 83%/+0.65R) AND the smoothed
-    market delta pushing the same way at entry: 92% win · +0.76R (n=13).
+    v3 gating: phone cards only for the DELTA-CONFIRMED cohort — (A+ or
+    A+/B+ continuation zone, 83%/+0.65R) AND the smoothed market delta
+    pushing the same way at entry: 92% win · +0.76R (n=13). Exit profile
+    0.75:1.5 since v10.2 (higher first-target hit rate at equal profit).
     Delta-against A+/elite setups (40-50%) and B+/C+ mid/deep zones (42-44%)
     stay web-feed watch lines — visible, honestly labeled, no card."""
     if not ent or not ent.get("touching"):
@@ -813,7 +824,11 @@ def maybe_setup_alert(ent, elite_stats=None):
     # switching this gate/exit automatically (see _maybe_upgrade)
     upg = ((STATE.get("research") or {}).get("upgrade") or {})
     gate = upg.get("gate") or "delta"
-    exitr = upg.get("exit") or [1.0, 2.0]
+    # v10.2 default exit 0.75:1.5 — promoted on evidence: A+ scan 80% win /
+    # +0.40R vs 67% / +0.33R at 1:2, and the research challenger scored
+    # 100% vs 92% on the delta cohort. An OOS-qualified upgrade can still
+    # override this via the research engine.
+    exitr = upg.get("exit") or [0.75, 1.5]
     elite = bool(ent.get("contZone")) and grade in ("A+", "B+")
     base = elite or grade == "A+"
     if gate == "cont-only":

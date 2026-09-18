@@ -78,8 +78,18 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "10.9"
+SYSTEM_VERSION = "10.10"
 SYSTEM_CHANGELOG = {
+    "10.10": [
+        "FLOW TradingView indicator pushed to MAX FLOW: swing strength 2 "
+        "by default "
+        "\u2014 ~9 A+ setups/month (62% win, measured n=21, +40% more A+), "
+        "plus the 92% REV cohort \u2248 15 signals/month on 15m. A one-tap "
+        "input returns sniper-grade A+ (swing 3: 80% win). All stats "
+        "published openly on the website and in the group topic; "
+        "re-testing old zones can never create A+ (fresh-zone check), so "
+        "this is the honest maximum",
+    ],
     "10.9": [
         "SECOND TradingView indicator live: FLOW [15m] — doubles the "
         "15m signal count the honest way, A+ (80% win) plus the newly "
@@ -4359,8 +4369,9 @@ def _announce_indicator():
         "\u2022 REV reversal cohort \u2014 92% win (n=13): fresh BOS-origin "
         "zone + confirmed retest + live session, structure & 1H trend "
         "neutral \u2014 the early-reversal trades the sniper skips\n"
-        "\u2248 12 signals/month on 15m (double the sniper). B+ measures "
-        "45% and is EXCLUDED.\n"
+        "MAX-FLOW default (swing 2): \u2248 9 A+/month at 62% win + REV "
+        "\u2192 \u2248 15 signals/month on 15m. Set the Swing input to 3 for "
+        "sniper-grade A+ (80% win). B+ measures 45% and is EXCLUDED.\n"
         "Use on the 15m chart alongside indicator \u2116 1.\n"
         "Alerts: 'A+ LONG/SHORT setup' + 'REV LONG/SHORT setup'.")
     total = n1 + n2

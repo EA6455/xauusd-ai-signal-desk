@@ -78,8 +78,14 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "2.9.6"
+SYSTEM_VERSION = "2.9.7"
 SYSTEM_CHANGELOG = {
+    "2.9.7": [
+        "Zero-lag TV match: the TradingView poll now runs every 2s and "
+        "HARD-LOCKS the level to their exact number on every poll — "
+        "between polls only the tape's motion moves the price, so the "
+        "desk and TradingView read the same number together",
+    ],
     "2.9.6": [
         "While TradingView's feed is reachable it carries the price level "
         "100% (futures leg demoted to fallback) — the displayed number "
@@ -1612,17 +1618,18 @@ def check_price_alerts(prev, new):
         _notify("⏰ " + a["msg"])
 
 
-_tv_spot_mem = {"price": None, "t": 0.0, "n": 0}
+_tv_spot_mem = {"price": None, "t": 0.0, "n": 0, "tape_ref": None}
 
 TV_SPOT_TFS = ["OANDA:XAUUSD", "FOREXCOM:XAUUSD"]
 
 
-def _tv_spot():
+def _tv_spot(force=False):
     """Level truth straight from TradingView's own public scanner — the
-    exact number their XAUUSD chart shows (OANDA spot). Cached; the
-    dedicated poller refreshes it every few seconds."""
+    exact number their XAUUSD chart shows (OANDA spot). Also snapshots
+    the tape mid at poll time (tape_ref) so the displayed price can be
+    re-pinned to TV's number and carry only tape MOTION between polls."""
     now = time.time()
-    if _tv_spot_mem["price"] and now - _tv_spot_mem["t"] < 4:
+    if not force and _tv_spot_mem["price"] and now - _tv_spot_mem["t"] < 4:
         return _tv_spot_mem["price"]
     import urllib.request
     try:
@@ -1643,21 +1650,26 @@ def _tv_spot():
         if closes:
             closes.sort()
             _tv_spot_mem.update(price=closes[len(closes) // 2], t=now,
-                                n=_tv_spot_mem.get("n", 0) + 1)
+                                n=_tv_spot_mem.get("n", 0) + 1,
+                                tape_ref=wsfeed.mid(max_age=60)[0])
     except Exception:  # noqa: BLE001  — scanner briefly unavailable
         pass
     return _tv_spot_mem["price"]
 
 
 def _tv_spot_loop():
-    """Keep the TradingView level fresh (every 6s — one gentle request,
-    the same endpoint their website uses)."""
+    """Keep the TradingView level fresh — every 2s while it answers
+    (auto-backoff to 6s on errors). One light request, the same public
+    endpoint their website uses; between polls the tape carries motion."""
+    delay = 2.0
     while True:
+        ok = False
         try:
-            _tv_spot()
+            ok = _tv_spot(force=True) is not None
         except Exception:  # noqa: BLE001
-            pass
-        time.sleep(6)
+            ok = False
+        delay = 2.0 if ok else min(6.0, delay * 2)
+        time.sleep(delay)
 
 
 def spot_reference():
@@ -1809,89 +1821,102 @@ def _tick_spot_raw(max_age=0.8):
     #    follows the live book instead of trailing the slow spot feed.
     wm, _wt = wsfeed.mid(max_age=30)
     if wm:
-        # ---- sample T: TradingView level (the reference users compare
-        #      against) — freshest truth, fast-locked
+        # ---- sample T: TradingView HARD LOCK (resample & hold): every
+        #      fresh TV poll re-pins the displayed level to their EXACT
+        #      number; between polls only the tape's motion is applied.
+        #      delta vs TV = 0 by construction at each poll.
+        tv_lock = None
         tvp, tvt = _tv_spot_mem["price"], _tv_spot_mem["t"]
-        if tvp and now - tvt < 30:
-            fs_tv = tvp - wm
+        tref = _tv_spot_mem.get("tape_ref")
+        if tvp and tref and now - tvt < 30:
+            off_tv = tvp - tref
+            if abs(off_tv) <= 8.0:
+                _anchor_mem.update(offset=off_tv, t=now, ema=off_tv,
+                                   ema_f=None, warm=99, last_ts=tvt)
+                tv_lock = off_tv
+        elif tvp and now - tvt < 30 and not tref:
+            fs_tv = tvp - wm                     # tape ref missing: soft lock
             if abs(fs_tv) <= 8.0:
                 prev = _anchor_mem.get("ema")
                 ema = fs_tv if prev is None else prev + 0.5 * (fs_tv - prev)
                 _anchor_mem.update(ema=ema, warm=max(
                     _anchor_mem.get("warm", 0), 99), last_ts=tvt)
-        # ---- sample A: timestamp-matched gold-api premium (level truth, slow)
-        matched_ts = None
-        anchor_target = None
-        if spot and spot.get("updatedAt"):
-            ts = _feed_epoch(spot["updatedAt"])
-            if ts and now - ts <= 120:
-                m_then = wsfeed.mid_at(ts)
-                if m_then:
-                    anchor_target = spot["price"] - m_then
-                    matched_ts = ts
-        if anchor_target is None and spot:
-            anchor_target = spot["price"] - wm
-        if anchor_target is not None and abs(anchor_target) <= 8.0:
-            if matched_ts is not None and matched_ts != _anchor_mem.get("last_ts"):
-                # AUTO-SYNC TO THE REAL MARKET: each NEW spot print re-locks
-                # the level hard (a just-published quote IS the market at that
-                # instant); older re-samples only nudge it gently.
-                prev = _anchor_mem.get("ema")
-                warm = _anchor_mem.get("warm", 0)
-                quote_age = max(0.0, now - matched_ts)
-                if prev is None:
-                    ema = anchor_target
-                else:
-                    alpha = 0.35 if warm < 8 else (0.55 if quote_age <= 20 else 0.08)
-                    ema = prev + alpha * (anchor_target - prev)
-                _anchor_mem.update(ema=ema, warm=warm + 1, last_ts=matched_ts)
-            elif matched_ts is None:
-                if _anchor_mem.get("ema") is None:
-                    _anchor_mem["ema"] = anchor_target
-                    _anchor_mem["warm"] = _anchor_mem.get("warm", 0) + 1
-        # ---- sample B: real-time futures premium (GC=F is near-instant; the
-        #      futures basis is stable, so q - basis tracks spot with no lag)
-        if q and basis_ok:
-            fs = (q - _basis_mem["value"]) - wm
-            if abs(fs) <= 8.0 and now - _anchor_mem.get("last_f_ts", 0) >= 5:
-                prev = _anchor_mem.get("ema_f")
-                warm = _anchor_mem.get("warm_f", 0)
-                alpha = 0.35 if warm < 12 else 0.15
-                ema_f = fs if prev is None else prev + alpha * (fs - prev)
-                _anchor_mem.update(ema_f=ema_f, warm_f=warm + 1, last_f_ts=now)
-        # ---- blend: level truth (A) + real-time tracking (B).
-        # The futures level (B) reacts within milliseconds; gold-api (A) trails
-        # the true spot by 30-60s. So B gets the larger weight, and even more
-        # while A's quote is aging — the displayed price sticks to the LIVE
-        # market instead of trailing the slow spot feed.
-        ea, ef = _anchor_mem.get("ema"), _anchor_mem.get("ema_f")
-        if ea is not None and ef is not None:
-            ga_age = 999.0
+        if tv_lock is None:
+            # ---- sample A: timestamp-matched gold-api premium (level truth, slow)
+            matched_ts = None
+            anchor_target = None
             if spot and spot.get("updatedAt"):
-                _ts = _feed_epoch(spot["updatedAt"])
-                if _ts:
-                    ga_age = now - _ts
-            # the fresher the spot print, the more it IS the market;
-            # as it ages the instant futures level carries the movement
-            tv_fresh = (_tv_spot_mem["price"] is not None
-                         and now - _tv_spot_mem["t"] < 30)
-            if tv_fresh:
-                w_f = 0.0           # TV IS the level; futures only as fallback
-            elif ga_age <= 20:
-                w_f = 0.40
-            elif ga_age <= 45:
-                w_f = 0.60
-            else:
-                w_f = 0.72
-            _anchor_mem["offset"] = (1.0 - w_f) * ea + w_f * ef
-        elif ea is not None:
-            _anchor_mem["offset"] = ea
-        elif ef is not None:
-            _anchor_mem["offset"] = ef
+                ts = _feed_epoch(spot["updatedAt"])
+                if ts and now - ts <= 120:
+                    m_then = wsfeed.mid_at(ts)
+                    if m_then:
+                        anchor_target = spot["price"] - m_then
+                        matched_ts = ts
+            if anchor_target is None and spot:
+                anchor_target = spot["price"] - wm
+            if anchor_target is not None and abs(anchor_target) <= 8.0:
+                if matched_ts is not None and matched_ts != _anchor_mem.get("last_ts"):
+                    # AUTO-SYNC TO THE REAL MARKET: each NEW spot print re-locks
+                    # the level hard (a just-published quote IS the market at that
+                    # instant); older re-samples only nudge it gently.
+                    prev = _anchor_mem.get("ema")
+                    warm = _anchor_mem.get("warm", 0)
+                    quote_age = max(0.0, now - matched_ts)
+                    if prev is None:
+                        ema = anchor_target
+                    else:
+                        alpha = 0.35 if warm < 8 else (0.55 if quote_age <= 20 else 0.08)
+                        ema = prev + alpha * (anchor_target - prev)
+                    _anchor_mem.update(ema=ema, warm=warm + 1, last_ts=matched_ts)
+                elif matched_ts is None:
+                    if _anchor_mem.get("ema") is None:
+                        _anchor_mem["ema"] = anchor_target
+                        _anchor_mem["warm"] = _anchor_mem.get("warm", 0) + 1
+            # ---- sample B: real-time futures premium (GC=F is near-instant; the
+            #      futures basis is stable, so q - basis tracks spot with no lag)
+            if q and basis_ok:
+                fs = (q - _basis_mem["value"]) - wm
+                if abs(fs) <= 8.0 and now - _anchor_mem.get("last_f_ts", 0) >= 5:
+                    prev = _anchor_mem.get("ema_f")
+                    warm = _anchor_mem.get("warm_f", 0)
+                    alpha = 0.35 if warm < 12 else 0.15
+                    ema_f = fs if prev is None else prev + alpha * (fs - prev)
+                    _anchor_mem.update(ema_f=ema_f, warm_f=warm + 1, last_f_ts=now)
+            # ---- blend: level truth (A) + real-time tracking (B).
+            # The futures level (B) reacts within milliseconds; gold-api (A) trails
+            # the true spot by 30-60s. So B gets the larger weight, and even more
+            # while A's quote is aging — the displayed price sticks to the LIVE
+            # market instead of trailing the slow spot feed.
+            ea, ef = _anchor_mem.get("ema"), _anchor_mem.get("ema_f")
+            if ea is not None and ef is not None:
+                ga_age = 999.0
+                if spot and spot.get("updatedAt"):
+                    _ts = _feed_epoch(spot["updatedAt"])
+                    if _ts:
+                        ga_age = now - _ts
+                # the fresher the spot print, the more it IS the market;
+                # as it ages the instant futures level carries the movement
+                tv_fresh = (_tv_spot_mem["price"] is not None
+                             and now - _tv_spot_mem["t"] < 30)
+                if tv_fresh:
+                    w_f = 0.0           # TV IS the level; futures only as fallback
+                elif ga_age <= 20:
+                    w_f = 0.40
+                elif ga_age <= 45:
+                    w_f = 0.60
+                else:
+                    w_f = 0.72
+                _anchor_mem["offset"] = (1.0 - w_f) * ea + w_f * ef
+            elif ea is not None:
+                _anchor_mem["offset"] = ea
+            elif ef is not None:
+                _anchor_mem["offset"] = ef
         _anchor_mem["t"] = now
         off = _anchor_mem["offset"]
-        if abs(off) <= 8.0:
-            price, src = round(wm + off, 2), "realtime feed"
+        if off is not None and abs(off) <= 8.0:
+            price, src = round(wm + off, 2), ("tradingview-locked"
+                                              if tv_lock is not None
+                                              else "realtime feed")
     # 2. live futures quote minus basis
     if price is None and q and basis_ok:
         price, src = round(q - _basis_mem["value"], 2), "live futures - basis"

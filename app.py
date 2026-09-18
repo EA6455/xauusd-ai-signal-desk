@@ -78,8 +78,14 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "2.9.7"
+SYSTEM_VERSION = "2.9.8"
 SYSTEM_CHANGELOG = {
+    "2.9.8": [
+        "Self-tuning TradingView poll: backs off instantly when the "
+        "scanner throttles, ramps up slowly when it doesn't — the level "
+        "lock runs at the fastest cadence TradingView allows from this "
+        "network (diagnostics in /api/feed)",
+    ],
     "2.9.7": [
         "Zero-lag TV match: the TradingView poll now runs every 2s and "
         "HARD-LOCKS the level to their exact number on every poll — "
@@ -1642,7 +1648,7 @@ def _tv_spot(force=False):
                      "User-Agent": "Mozilla/5.0",
                      "Origin": "https://www.tradingview.com",
                      "Referer": "https://www.tradingview.com/"})
-        with urllib.request.urlopen(req, timeout=8) as r:
+        with urllib.request.urlopen(req, timeout=4) as r:
             j = json.load(r)
         closes = [row["d"][0] for row in j.get("data") or []
                   if isinstance(row.get("d"), list) and row["d"]
@@ -1652,23 +1658,35 @@ def _tv_spot(force=False):
             _tv_spot_mem.update(price=closes[len(closes) // 2], t=now,
                                 n=_tv_spot_mem.get("n", 0) + 1,
                                 tape_ref=wsfeed.mid(max_age=60)[0])
-    except Exception:  # noqa: BLE001  — scanner briefly unavailable
-        pass
+    except Exception as e:  # noqa: BLE001  — throttled / unreachable
+        _tv_spot_mem["err"] = str(e)[:80]
     return _tv_spot_mem["price"]
 
 
 def _tv_spot_loop():
-    """Keep the TradingView level fresh — every 2s while it answers
-    (auto-backoff to 6s on errors). One light request, the same public
-    endpoint their website uses; between polls the tape carries motion."""
-    delay = 2.0
+    """Keep the TradingView level fresh with a SELF-TUNING cadence: start
+    at 2s, back off quickly when the scanner refuses (some networks are
+    throttled harder than others), speed up slowly after a streak of
+    successes — it settles at the fastest rate TradingView tolerates
+    from this machine's network. Between polls the tape carries motion."""
+    fast, slow = 2.0, 8.0
+    delay = fast
+    wins = 0
     while True:
         ok = False
         try:
             ok = _tv_spot(force=True) is not None
         except Exception:  # noqa: BLE001
             ok = False
-        delay = 2.0 if ok else min(6.0, delay * 2)
+        if ok:
+            wins += 1
+            if wins >= 6 and delay > fast:      # speed up slowly
+                delay = max(fast, delay / 1.5)
+                wins = 0
+        else:
+            wins = 0
+            delay = min(slow, delay * 1.7)      # back off quickly
+        _tv_spot_mem["pollDelay"] = round(delay, 1)
         time.sleep(delay)
 
 
@@ -4743,7 +4761,9 @@ def api_feed():
                    tv=dict(price=tv, age=round(time.time() - _tv_spot_mem["t"], 1)
                            if _tv_spot_mem["t"] else None,
                            delta=round(disp - tv, 2)
-                           if (tv and disp) else None),
+                           if (tv and disp) else None,
+                           pollDelay=_tv_spot_mem.get("pollDelay"),
+                           err=_tv_spot_mem.get("err")),
                    engine=dict(running=bool(e.get("on")),
                                hz=round(e.get("n", 0) / max(
                                    1e-9, time.time() - _BOOT_T), 2),

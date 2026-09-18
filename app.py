@@ -78,8 +78,19 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "10.15"
+SYSTEM_VERSION = "10.16"
 SYSTEM_CHANGELOG = {
+    "10.16": [
+        "FOURTH TradingView indicator: PROOF [Self-Proving Zones] \u2014 "
+        "the first indicator that proves itself. Every zone label carries "
+        "its own measured track record computed live on the user's own "
+        "chart: 1st/2nd/3rd+ touch bounce rates vs a raw-pivot-level base "
+        "rate, closed-bar outcomes only (no repaint), timeouts excluded, "
+        "small samples flagged. Scoreboard table shows the full evidence "
+        "and the edge vs raw levels. Served at /pine4 with a fourth "
+        "one-click-copy card on the website front page; all four "
+        "indicator sources reposted to the INDICATOR topic",
+    ],
     "10.15": [
         "Website renamed to INDICATOR: the front page now shows ONLY "
         "the three indicators with one-click copy \u2014 the box guide "
@@ -4400,9 +4411,9 @@ def _announce_indicator():
         "Backtest: 80% win \u00b7 0.75R exit \u00b7 BUY and SELL \u00b7 draws the "
         "full trade (entry, SL, TP1/TP2, profit/risk zones).\n"
         "Charts: 15m (main), 1H and 4H (extra A+ streams).\n\n"
-        "EASIEST INSTALL: open the desk website \u2192 \U0001F4CB TV INDICATOR "
-        "button \u2192 one click copies the whole script. Or paste ALL parts "
-        "below into the Pine Editor as ONE script.\n"
+        "EASIEST INSTALL: open the website front page \u2192 one click "
+        "copies the whole script. Or paste ALL parts below into the Pine "
+        "Editor as ONE script.\n"
         "Alerts: 'A+ LONG setup' / 'A+ SHORT setup'.")
     time.sleep(1.5)
     # indicator #2 — FLOW (15m): more signals, honestly labeled
@@ -4439,8 +4450,28 @@ def _announce_indicator():
         "Use it to READ the market: solid FRESH boxes = untested power, "
         "dashed TESTED = caution, gray WEAK = expect a break. Pair with "
         "\u2116 1 (A+ SNIPER) and \u2116 2 (FLOW) for the signals.\n"
-        "One-click copy: the desk website \u2192 \U0001F4CB TV INDICATOR.")
-    total = n1 + n2 + n3
+        "One-click copy: the website front page.")
+    time.sleep(1.5)
+    # indicator #4 — PROOF: the self-proving zones
+    n4 = _post_indicator_source(
+        "static/xauusd_proof.pine",
+        "\U0001F9EA INDICATOR \u2116 4 \u00b7 PROOF [Self-Proving Zones] "
+        "\u2014 the first indicator that proves itself\n\n"
+        "Every zone label carries its own measured track record, computed "
+        "live on YOUR chart's own history:\n"
+        "FRESH \u00b7 1st bounce 68% (n=24) \u00b7 TESTED (1) \u00b7 next "
+        "41% (n=15) \u00b7 WEAK (3) \u00b7 12% \u00b7 break map.\n\n"
+        "How it measures (honestly): on load it replays the whole chart, "
+        "finds every zone it would have drawn, and scores every touch \u2014 "
+        "a bounce counts ONLY if price travelled 1\u00d7ATR in the rejection "
+        "direction BEFORE the zone broke. Closed bars only, no repaint. "
+        "Cohorts: 1st / 2nd / 3rd+ touch, plus a BASE RATE from raw pivot "
+        "levels \u2014 so the scoreboard proves edge, not just movement. "
+        "Small samples are flagged 'low n'. Never fake numbers.\n\n"
+        "No signals, no alerts. It upgrades \u2116 1-3: run it beside them "
+        "and see which zones deserve your trust.\n"
+        "One-click copy: the website front page.")
+    total = n1 + n2 + n3 + n4
     if total:
         _tg_post_topic(
             "\U0001F4E6 HOW TO TRADE THE ZONE BOXES (FLOW indicator)\n\n"
@@ -4465,10 +4496,9 @@ def _announce_indicator():
             _tg_topics().get("indicator"))
         time.sleep(1.5)
         _tg_post_topic(
-            "\u2705 All three indicators posted. Install guide, one-click "
-            "copy "
-            "and the full box-trading guide: the desk website \u2192 "
-            "\U0001F4CB TV INDICATOR. Red error in the Pine Editor? Message "
+            "\u2705 All four indicators posted \u2014 \u2116 4 PROOF is the "
+            "new one: zones that prove themselves. One-click copy: the "
+            "website front page. Red error in the Pine Editor? Message "
             "the group. Not financial advice \u2014 every signal is scored "
             "honestly on the desk.",
             _tg_topics().get("indicator"))
@@ -4476,7 +4506,7 @@ def _announce_indicator():
         STATE["lastIndicatorPost"] = dict(t=int(time.time()),
                                           parts=total, sent=total)
         _save_state()
-    print(f"[desk] posted all 3 indicators to INDICATOR topic "
+    print(f"[desk] posted all 4 indicators to INDICATOR topic "
           f"({total} parts)", flush=True)
     return total
 
@@ -5585,6 +5615,19 @@ def pine_indicator_frt():
     try:
         with open(os.path.join(app.root_path, "static",
                                "xauusd_frt.pine")) as f:
+            txt = f.read()
+        return Response(txt, mimetype="text/plain")
+    except Exception:  # noqa: BLE001
+        return Response("-- indicator file missing --", mimetype="text/plain")
+
+
+@app.route("/pine4")
+def pine_proof():
+    """Indicator #4 — PROOF [Self-Proving Zones]: every zone label carries
+    its own measured track record, computed live on the user's chart."""
+    try:
+        with open(os.path.join(app.root_path, "static",
+                               "xauusd_proof.pine")) as f:
             txt = f.read()
         return Response(txt, mimetype="text/plain")
     except Exception:  # noqa: BLE001

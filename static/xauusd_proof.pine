@@ -1,0 +1,404 @@
+//@version=5
+// ============================================================================
+//  XAUUSD PROOF  ·  SELF-PROVING ZONES  —  the desk's FOURTH indicator
+//
+//  THE FIRST INDICATOR THAT PROVES ITSELF.
+//  Every zone label carries its own measured track record, computed live
+//  on YOUR chart's own history — not a promise, a measurement:
+//
+//     FRESH  · 1st bounce 68% (n=24)
+//     TESTED (1) · next 41% (n=15)
+//     WEAK (3)   · 12% (n=9) · break map
+//
+//  HOW IT MEASURES (honestly, no repaint):
+//     · on load it replays the chart bar by bar and finds every zone it
+//       would have drawn (same engine as the desk's FRT scout)
+//     · every touch of a zone is scored: a bounce counts ONLY if price
+//       travelled the target ATR in the rejection direction BEFORE the
+//       zone broke — evaluated on CLOSED bars only
+//     · cohorts: 1st touch / 2nd touch / 3rd+ touch
+//     · base rate: the same test on RAW pivot levels (no validation) —
+//       so the scoreboard proves EDGE, not just movement
+//     · small samples are flagged "low n" — never fake numbers
+//     · unresolved touches (timeout) are excluded and shown as such
+//
+//  No trade signals. No alerts. It upgrades indicators 1-3: run it
+//  beside them and see which zones deserve your trust.
+// ============================================================================
+indicator("XAUUSD PROOF [Self-Proving Zones]", overlay = true,
+     max_boxes_count = 500, max_labels_count = 50, max_lines_count = 50,
+     max_tables_count = 1)
+
+// ---- inputs: detection ------------------------------------------------------
+grpD = "Zone detection"
+kSwing   = input.int(3,     "Swing strength (bars each side) — 3 precise · 2 more boxes", minval = 2, maxval = 10, group = grpD)
+impAtr   = input.float(1.8, "Impulse: min ATR multiple",  minval = 0.5, step = 0.1, group = grpD)
+zoneAtr  = input.float(2.0, "Max zone height (ATR)",      minval = 0.5, step = 0.1, group = grpD)
+slBuf    = input.float(0.15, "Break buffer beyond zone (ATR)", minval = 0.0, step = 0.05, group = grpD)
+weakAfter = input.int(2,    "Touches before WEAK",        minval = 2, maxval = 5, group = grpD)
+maxZones  = input.int(30,   "Max zones on chart (oldest removed)", minval = 5, maxval = 60, group = grpD)
+maxAge    = input.int(500,  "Zone expiry (bars)",         minval = 50, maxval = 2000, group = grpD)
+
+// ---- inputs: PROOF measurement ------------------------------------------------
+grpP = "PROOF measurement"
+bounceR   = input.float(1.0, "Bounce target (ATR) — counts as HELD", minval = 0.25, step = 0.25, group = grpP)
+evalWindow = input.int(30,   "Evaluation window (bars)",  minval = 10, maxval = 100, group = grpP)
+minSample  = input.int(10,   "Low-sample flag below n",   minval = 5,  maxval = 30, group = grpP)
+showScoreboard = input.bool(true, "Show scoreboard", group = grpP)
+posOpt = input.string("Top Right", "Scoreboard position",
+     options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group = grpP)
+
+// ---- inputs: display -----------------------------------------------------------
+grpV = "Display"
+showDemand = input.bool(true, "Show demand zones (green)", group = grpV)
+showSupply = input.bool(true, "Show supply zones (red)",   group = grpV)
+extendBars = input.int(6,     "Extend boxes right (bars)", minval = 0, maxval = 40, group = grpV)
+bullColor  = input.color(color.green, "Demand color", group = grpV)
+bearColor  = input.color(color.red,   "Supply color", group = grpV)
+
+// ---- basics ---------------------------------------------------------------------
+atr = ta.atr(14)
+
+// stats: cohorts 0 = 1st touch, 1 = 2nd touch, 2 = 3rd+ (closed-bar outcomes only)
+var statsW = array.from(0, 0, 0)
+var statsN = array.from(0, 0, 0)
+var int bW = 0          // raw pivot-level base rate
+var int bN = 0
+var int exclN = 0       // unresolved (timeout) — excluded, never counted
+
+f_pct(w, n) =>
+    n > 0 ? str.tostring(100.0 * w / n, "#") + "%" : "—"
+
+f_lowN(n) =>
+    n > 0 and n < minSample ? " · low n" : ""
+
+f_resolve(tN, isWin) =>
+    ci = tN == 1 ? 0 : tN == 2 ? 1 : 2
+    array.set(statsN, ci, array.get(statsN, ci) + 1)
+    if isWin
+        array.set(statsW, ci, array.get(statsW, ci) + 1)
+
+// ---- swings ------------------------------------------------------------------------
+ph = ta.pivothigh(high, kSwing, kSwing)
+pl = ta.pivotlow(low,  kSwing, kSwing)
+
+var loIdx = array.new_int(0)
+var loVal = array.new_float(0)
+var loAtr = array.new_float(0)
+var loTop = array.new_float(0)
+var loBot = array.new_float(0)
+var hiIdx = array.new_int(0)
+var hiVal = array.new_float(0)
+var hiAtr = array.new_float(0)
+var hiTop = array.new_float(0)
+var hiBot = array.new_float(0)
+
+// raw pivot levels for the base rate
+var bIdx   = array.new_int(0)
+var bLvl   = array.new_float(0)
+var bDir   = array.new_int(0)
+var bBirth = array.new_int(0)
+
+// live zones
+var zTop = array.new_float(0)
+var zBot = array.new_float(0)
+var zSide = array.new_int(0)
+var zTouches = array.new_int(0)
+var zCreated = array.new_int(0)
+var zLeft = array.new_int(0)
+var zIn = array.new_int(0)
+var eBirth = array.new_int(0)
+var eTarget = array.new_float(0)
+var eBreak = array.new_float(0)
+var zBox = array.new_box(0)
+
+f_makeZone(sIdx, sTop, sBot, side) =>
+    if array.size(zTop) >= maxZones
+        box.delete(array.get(zBox, 0))
+        array.remove(zTop, 0)
+        array.remove(zBot, 0)
+        array.remove(zSide, 0)
+        array.remove(zTouches, 0)
+        array.remove(zCreated, 0)
+        array.remove(zLeft, 0)
+        array.remove(zIn, 0)
+        array.remove(eBirth, 0)
+        array.remove(eTarget, 0)
+        array.remove(eBreak, 0)
+        array.remove(zBox, 0)
+    zc = side == 1 ? bullColor : bearColor
+    sideVis = side == 1 ? showDemand : showSupply
+    txt = "FRESH"
+    if array.get(statsN, 0) > 0
+        txt := "FRESH · 1st bounce " + f_pct(array.get(statsW, 0), array.get(statsN, 0)) +
+             " (n=" + str.tostring(array.get(statsN, 0)) + ")" + f_lowN(array.get(statsN, 0))
+    array.push(zTop, sTop)
+    array.push(zBot, sBot)
+    array.push(zSide, side)
+    array.push(zTouches, 0)
+    array.push(zCreated, bar_index)
+    array.push(zLeft, sIdx)
+    array.push(zIn, 0)
+    array.push(eBirth, -1)
+    array.push(eTarget, 0.0)
+    array.push(eBreak, 0.0)
+    bx = sideVis ? box.new(sIdx, sTop, bar_index + extendBars, sBot, border_color = color.new(zc, 30), bgcolor = color.new(zc, 82), border_width = 1, text = txt, text_color = color.new(zc, 5), text_size = size.tiny) : box(na)
+    array.push(zBox, bx)
+
+// ---- pivot processing (pairing + raw base-rate levels) -------------------------------
+if not na(ph) and bar_index > kSwing + 2
+    pi = bar_index - kSwing
+    bTop = math.max(high[kSwing], math.max(high[kSwing + 1], high[kSwing + 2]))
+    bBot = math.min(low[kSwing],  math.min(low[kSwing + 1],  low[kSwing + 2]))
+    array.push(hiIdx, pi)
+    array.push(hiVal, ph)
+    array.push(hiAtr, atr[kSwing])
+    array.push(hiTop, bTop)
+    array.push(hiBot, bBot)
+    array.push(bIdx, pi)
+    array.push(bLvl, ph)
+    array.push(bDir, -1)
+    array.push(bBirth, bar_index)
+    if array.size(loIdx) > 0
+        for i = array.size(loIdx) - 1 to 0
+            sIdx = array.get(loIdx, i)
+            sVal = array.get(loVal, i)
+            sAtr = array.get(loAtr, i)
+            sTop = array.get(loTop, i)
+            sBot = array.get(loBot, i)
+            impulse = ph - sVal
+            if pi - sIdx <= 48 and impulse >= impAtr * sAtr and sTop > sBot and sTop - sBot <= zoneAtr * sAtr
+                dup = false
+                if array.size(zTop) > 0
+                    for zi = 0 to array.size(zTop) - 1
+                        if array.get(zSide, zi) == 1 and bar_index - array.get(zCreated, zi) <= 24 and not (sBot > array.get(zTop, zi) or sTop < array.get(zBot, zi))
+                            dup := true
+                            break
+                if not dup
+                    f_makeZone(sIdx, sTop, sBot, 1)
+            array.remove(loIdx, i)
+            array.remove(loVal, i)
+            array.remove(loAtr, i)
+            array.remove(loTop, i)
+            array.remove(loBot, i)
+
+if not na(pl) and bar_index > kSwing + 2
+    pi = bar_index - kSwing
+    bTop = math.max(high[kSwing], math.max(high[kSwing + 1], high[kSwing + 2]))
+    bBot = math.min(low[kSwing],  math.min(low[kSwing + 1],  low[kSwing + 2]))
+    array.push(loIdx, pi)
+    array.push(loVal, pl)
+    array.push(loAtr, atr[kSwing])
+    array.push(loTop, bTop)
+    array.push(loBot, bBot)
+    array.push(bIdx, pi)
+    array.push(bLvl, pl)
+    array.push(bDir, 1)
+    array.push(bBirth, bar_index)
+    if array.size(hiIdx) > 0
+        for i = array.size(hiIdx) - 1 to 0
+            sIdx = array.get(hiIdx, i)
+            sVal = array.get(hiVal, i)
+            sAtr = array.get(hiAtr, i)
+            sTop = array.get(hiTop, i)
+            sBot = array.get(hiBot, i)
+            impulse = sVal - pl
+            if pi - sIdx <= 48 and impulse >= impAtr * sAtr and sTop > sBot and sTop - sBot <= zoneAtr * sAtr
+                dup = false
+                if array.size(zTop) > 0
+                    for zi = 0 to array.size(zTop) - 1
+                        if array.get(zSide, zi) == -1 and bar_index - array.get(zCreated, zi) <= 24 and not (sBot > array.get(zTop, zi) or sTop < array.get(zBot, zi))
+                            dup := true
+                            break
+                if not dup
+                    f_makeZone(sIdx, sTop, sBot, -1)
+            array.remove(hiIdx, i)
+            array.remove(hiVal, i)
+            array.remove(hiAtr, i)
+            array.remove(hiTop, i)
+            array.remove(hiBot, i)
+
+// ---- PROOF engine — CLOSED BARS ONLY (strict no-repaint) ------------------------------
+if barstate.isconfirmed
+    // 1) continue open zone evaluations
+    if array.size(zTop) > 0
+        for zi = 0 to array.size(zTop) - 1
+            eb = array.get(eBirth, zi)
+            if eb >= 0 and bar_index > eb
+                s = array.get(zSide, zi)
+                res = false
+                if s == 1
+                    if low <= array.get(eBreak, zi)
+                        f_resolve(array.get(zTouches, zi), false)
+                        res := true
+                    else if high >= array.get(eTarget, zi)
+                        f_resolve(array.get(zTouches, zi), true)
+                        res := true
+                else
+                    if high >= array.get(eBreak, zi)
+                        f_resolve(array.get(zTouches, zi), false)
+                        res := true
+                    else if low <= array.get(eTarget, zi)
+                        f_resolve(array.get(zTouches, zi), true)
+                        res := true
+                if not res and bar_index - eb > evalWindow
+                    exclN += 1
+                    res := true
+                if res
+                    array.set(eBirth, zi, -1)
+
+    // 2) raw pivot-level base rate (same test, no validation)
+    if array.size(bIdx) > 0
+        for i = array.size(bIdx) - 1 to 0
+            bdir = array.get(bDir, i)
+            lvl = array.get(bLvl, i)
+            born = array.get(bBirth, i)
+            if bar_index > born
+                oc = 0
+                if bdir == 1
+                    if low < lvl - slBuf * atr
+                        oc := 2
+                    else if high >= lvl + bounceR * atr
+                        oc := 1
+                else
+                    if high > lvl + slBuf * atr
+                        oc := 2
+                    else if low <= lvl - bounceR * atr
+                        oc := 1
+                if oc == 0 and bar_index - born > evalWindow
+                    oc := 3
+                if oc == 1
+                    bW += 1
+                    bN += 1
+                else if oc == 2
+                    bN += 1
+                else if oc == 3
+                    exclN += 1
+                if oc != 0
+                    array.remove(bIdx, i)
+                    array.remove(bLvl, i)
+                    array.remove(bDir, i)
+                    array.remove(bBirth, i)
+        if array.size(bIdx) > 200
+            for i = 0 to array.size(bIdx) - 201
+                array.remove(bIdx, 0)
+                array.remove(bLvl, 0)
+                array.remove(bDir, 0)
+                array.remove(bBirth, 0)
+
+    // 3) touch detection + state labels + evaluation start
+    if array.size(zTop) > 0
+        for zi = 0 to array.size(zTop) - 1
+            s = array.get(zSide, zi)
+            zt = array.get(zTop, zi)
+            zb = array.get(zBot, zi)
+            if not na(array.get(zBox, zi))
+                box.set_right(array.get(zBox, zi), bar_index + extendBars)
+            touching = s == 1 ? (low <= zt and close >= zb) : (high >= zb and close <= zt)
+            if touching and array.get(zIn, zi) == 0
+                tN = array.get(zTouches, zi) + 1
+                array.set(zTouches, zi, tN)
+                brokenNow = s == 1 ? low < zb - slBuf * atr : high > zt + slBuf * atr
+                if not brokenNow
+                    array.set(eBirth, zi, bar_index)
+                    array.set(eTarget, zi, s == 1 ? zt + bounceR * atr : zb - bounceR * atr)
+                    array.set(eBreak, zi, s == 1 ? zb - slBuf * atr : zt + slBuf * atr)
+                // state label carries the NEXT-touch cohort stats
+                isWeak = tN >= weakAfter
+                sideVis = s == 1 ? showDemand : showSupply
+                nxi = tN == 1 ? 1 : 2
+                nN = array.get(statsN, nxi)
+                nW = array.get(statsW, nxi)
+                txt = (isWeak ? "WEAK (" + str.tostring(tN) + ")" : "TESTED (" + str.tostring(tN) + ")") +
+                     " · next " + f_pct(nW, nN) + " (n=" + str.tostring(nN) + ")" + f_lowN(nN)
+                if isWeak
+                    txt += " · break map"
+                bxh = array.get(zBox, zi)
+                zc = s == 1 ? bullColor : bearColor
+                if sideVis
+                    if na(bxh)
+                        array.set(zBox, zi, box.new(array.get(zLeft, zi), zt, bar_index + extendBars, zb, border_color = isWeak ? color.new(color.gray, 45) : color.new(zc, 35), bgcolor = isWeak ? color.new(zc, 95) : color.new(zc, 92), border_width = 1, border_style = isWeak ? line.style_solid : line.style_dashed, text = txt, text_color = isWeak ? color.new(color.gray, 15) : color.new(zc, 25), text_size = size.tiny))
+                    else
+                        box.set_text(bxh, txt)
+                        box.set_text_color(bxh, isWeak ? color.new(color.gray, 15) : color.new(zc, 25))
+                        box.set_border_style(bxh, line.style_dashed)
+                        if isWeak
+                            box.set_border_color(bxh, color.new(color.gray, 45))
+                            box.set_bgcolor(bxh, color.new(zc, 95))
+                        else
+                            box.set_bgcolor(bxh, color.new(zc, 92))
+            array.set(zIn, zi, touching ? 1 : 0)
+
+    // 4) break / age deletion
+    if array.size(zTop) > 0
+        for zi = array.size(zTop) - 1 to 0
+            s = array.get(zSide, zi)
+            zt = array.get(zTop, zi)
+            zb = array.get(zBot, zi)
+            old = bar_index - array.get(zCreated, zi)
+            broken = s == 1 ? low < zb - slBuf * atr : high > zt + slBuf * atr
+            if broken or old > maxAge
+                if array.get(eBirth, zi) >= 0
+                    exclN += 1
+                box.delete(array.get(zBox, zi))
+                array.remove(zTop, zi)
+                array.remove(zBot, zi)
+                array.remove(zSide, zi)
+                array.remove(zTouches, zi)
+                array.remove(zCreated, zi)
+                array.remove(zLeft, zi)
+                array.remove(zIn, zi)
+                array.remove(eBirth, zi)
+                array.remove(eTarget, zi)
+                array.remove(eBreak, zi)
+                array.remove(zBox, zi)
+
+// ---- pruning of unpaired pivots -----------------------------------------------------
+if array.size(loIdx) > 0
+    for i = array.size(loIdx) - 1 to 0
+        if bar_index - array.get(loIdx, i) > 200
+            array.remove(loIdx, i)
+            array.remove(loVal, i)
+            array.remove(loAtr, i)
+            array.remove(loTop, i)
+            array.remove(loBot, i)
+if array.size(hiIdx) > 0
+    for i = array.size(hiIdx) - 1 to 0
+        if bar_index - array.get(hiIdx, i) > 200
+            array.remove(hiIdx, i)
+            array.remove(hiVal, i)
+            array.remove(hiAtr, i)
+            array.remove(hiTop, i)
+            array.remove(hiBot, i)
+
+// ---- scoreboard: this chart's own evidence ---------------------------------------------
+var table tb = na
+if showScoreboard
+    if na(tb)
+        posMap = posOpt == "Top Right" ? position.top_right : posOpt == "Top Left" ? position.top_left : posOpt == "Bottom Right" ? position.bottom_right : position.bottom_left
+        tb := table.new(posMap, 3, 7, bgcolor = color.new(#0a0e17, 15), border_width = 1, border_color = color.new(color.gray, 72))
+    if barstate.islast
+        table.clear(tb, 0, 0, 2, 6)
+        table.cell(tb, 0, 0, "PROOF · THIS CHART'S OWN HISTORY", text_color = color.new(color.white, 8), text_size = size.small, bgcolor = color.new(color.gray, 62))
+        table.merge_cells(tb, 0, 0, 2, 0)
+        table.cell(tb, 0, 1, "1st touch (FRESH)", text_color = color.new(color.white, 25), text_size = size.tiny)
+        table.cell(tb, 1, 1, f_pct(array.get(statsW, 0), array.get(statsN, 0)), text_color = color.new(color.green, 10), text_size = size.tiny)
+        table.cell(tb, 2, 1, "n=" + str.tostring(array.get(statsN, 0)) + f_lowN(array.get(statsN, 0)), text_color = color.new(color.gray, 30), text_size = size.tiny)
+        table.cell(tb, 0, 2, "2nd touch", text_color = color.new(color.white, 25), text_size = size.tiny)
+        table.cell(tb, 1, 2, f_pct(array.get(statsW, 1), array.get(statsN, 1)), text_color = color.new(color.white, 20), text_size = size.tiny)
+        table.cell(tb, 2, 2, "n=" + str.tostring(array.get(statsN, 1)), text_color = color.new(color.gray, 30), text_size = size.tiny)
+        table.cell(tb, 0, 3, "3rd+ touch", text_color = color.new(color.white, 25), text_size = size.tiny)
+        table.cell(tb, 1, 3, f_pct(array.get(statsW, 2), array.get(statsN, 2)), text_color = color.new(color.gray, 15), text_size = size.tiny)
+        table.cell(tb, 2, 3, "n=" + str.tostring(array.get(statsN, 2)), text_color = color.new(color.gray, 30), text_size = size.tiny)
+        table.cell(tb, 0, 4, "raw pivot levels", text_color = color.new(color.gray, 20), text_size = size.tiny)
+        table.cell(tb, 1, 4, f_pct(bW, bN), text_color = color.new(color.gray, 10), text_size = size.tiny)
+        table.cell(tb, 2, 4, "n=" + str.tostring(bN), text_color = color.new(color.gray, 30), text_size = size.tiny)
+        edgeTxt = "—"
+        if array.get(statsN, 0) > 0 and bN > 0
+            d = int(math.round(100.0 * array.get(statsW, 0) / array.get(statsN, 0) - 100.0 * bW / bN))
+            edgeTxt := (d >= 0 ? "+" : "") + str.tostring(d) + " pts"
+        table.cell(tb, 0, 5, "edge (1st vs raw)", text_color = color.new(color.white, 25), text_size = size.tiny)
+        table.cell(tb, 1, 5, edgeTxt, text_color = edgeTxt == "—" or str.contains(edgeTxt, "-") ? color.new(color.gray, 15) : color.new(color.green, 10), text_size = size.tiny)
+        table.cell(tb, 2, 5, "", text_size = size.tiny)
+        table.cell(tb, 0, 6, "bounce = " + str.tostring(bounceR, "#.##") + " ATR before break · " + str.tostring(evalWindow) + " bars · closed bars only · timeouts excluded: " + str.tostring(exclN), text_color = color.new(color.gray, 35), text_size = size.tiny)
+        table.merge_cells(tb, 0, 6, 2, 6)

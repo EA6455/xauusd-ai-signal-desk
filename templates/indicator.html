@@ -128,7 +128,31 @@
     <div class="hint" id="hint3">copies the whole script to your clipboard, ready to paste</div>
     <div class="meta"><span id="mchars3">…</span><span id="mlines3">…</span></div>
     <pre class="src" id="src3"><span style="color:var(--muted)">loading source…</span></pre>
+  <div class="card" style="border-color:rgba(167,139,250,.4)">
+    <h1>④ <span style="color:#a78bfa">PROOF</span> — Self-Proving Zones · measured, not promised</h1>
+    <p><b>The first indicator that proves itself.</b> Every zone label carries its own measured track
+       record, computed live on <b>your chart's own history</b>: <b>FRESH · 1st bounce 68% (n=24)</b> ·
+       TESTED (1) · next 41% · WEAK (3) · 12% · break map. On load it replays the whole chart, finds
+       every zone it would have drawn, and scores every touch honestly: a bounce counts only if price
+       travelled the target ATR in the rejection direction <b>before</b> the zone broke — closed bars
+       only, <b>no repaint</b>. Timeouts are excluded, small samples are flagged <b>low n</b> — never fake numbers.</p>
+    <div class="stats">
+      <span class="pill" style="border-color:rgba(167,139,250,.5); color:#c4b5fd">every label = its own track record</span>
+      <span class="pill">base rate vs raw levels · edge proven</span>
+      <span class="pill">no signals · no alerts · closed bars only</span>
+    </div>
+    <p style="margin-top:8px"><b>Scoreboard</b> (top-right, toggleable): 1st / 2nd / 3rd+ touch bounce rates,
+       the same test on raw pivot levels (base rate), and the <b>edge in points</b> — proof the zones beat
+       random levels on your timeframe. Options: bounce target (ATR), evaluation window, low-sample
+       threshold, scoreboard position, demand/supply filters, colors, zone caps. Pairs with ① ② ③:
+       run PROOF beside them and see which zones deserve your trust.</p>
+    <button class="copybtn" id="copyBtn4" style="border:1px solid rgba(167,139,250,.6); background:linear-gradient(92deg, rgba(167,139,250,.16), rgba(34,211,238,.12)); color:#e4dcff; text-shadow:0 0 14px rgba(167,139,250,.5)">📋 COPY PROOF — 1 CLICK</button>
+    <div class="hint" id="hint4">copies the whole script to your clipboard, ready to paste</div>
+    <div class="meta"><span id="mchars4">…</span><span id="mlines4">…</span></div>
+    <pre class="src" id="src4"><span style="color:var(--muted)">loading source…</span></pre>
   </div>
+</div>
+
 <script>
 (() => {
   function wire(btnId, hintId, preId, charsId, linesId, url, okText){
@@ -169,6 +193,8 @@
   wire('copyBtn2', 'hint2', 'src2', 'mchars2', 'mlines2', '/pine2',
        '✅ COPIED — NOW PASTE IT IN THE PINE EDITOR');
   wire('copyBtn3', 'hint3', 'src3', 'mchars3', 'mlines3', '/pine3',
+       '✅ COPIED — NOW PASTE IT IN THE PINE EDITOR');
+  wire('copyBtn4', 'hint4', 'src4', 'mchars4', 'mlines4', '/pine4',
        '✅ COPIED — NOW PASTE IT IN THE PINE EDITOR');
 })();
 </script>

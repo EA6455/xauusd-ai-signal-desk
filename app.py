@@ -78,8 +78,17 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "2.9.11"
+SYSTEM_VERSION = "2.9.12"
 SYSTEM_CHANGELOG = {
+    "2.9.12": [
+        "Lossless discipline: AI-trader calls are hard-blocked against "
+        "the 60m trend regime (the exact cohort that produced both "
+        "recorded losses — backtest: counter-trend 37% win vs with-trend "
+        "50%), entry orders expire after 4h instead of 12h so stale "
+        "theses can never fill far from validity, no new auto cards "
+        "while 4 calls are open, and junk journal records are purged "
+        "from the scorecard",
+    ],
     "2.9.11": [
         "Permanent TV lock: the level pusher now runs as its own "
         "always-on service (separate IP, immune to scanner bans and to "
@@ -3194,7 +3203,8 @@ def _ai_trader_post(sig):
 
 
 AI_TRADE_MAX = 50          # tracked AI calls kept (newest first)
-AI_FILL_BARS = 48          # bars a limit/stop entry gets to fill (12h)
+AI_FILL_BARS = 16          # bars a limit/stop entry gets to fill (4h —
+                           # an intraday thesis is stale after that)
 AI_HOLD_BARS = 48          # bars after fill before mark-to-market (12h)
 
 
@@ -3308,6 +3318,7 @@ def _ai_trader_stats():
     excluded)."""
     rs = [t.get("r") for t in (STATE.get("aiTrades") or [])
           if t.get("status") in ("win", "loss", "timeout")
+          and t.get("direction") in ("buy", "sell")
           and isinstance(t.get("r"), (int, float))]
     if not rs:
         return dict(n=0, winPct=None, avgR=None)
@@ -3328,13 +3339,49 @@ def _ai_trades_merge(remote, local):
 
     m = {}
     for t in (remote or []):
-        m[key(t)] = t
+        if t.get("direction") in ("buy", "sell"):
+            m[key(t)] = t
     for t in (local or []):
+        if t.get("direction") not in ("buy", "sell"):
+            continue
         k = key(t)
         if k not in m or rank(t) >= rank(m[k]):
             m[k] = t
     return sorted(m.values(), key=lambda t: t.get("t") or 0,
                   reverse=True)[:AI_TRADE_MAX]
+
+
+_ai_regime_mem = {"t": 0.0, "v": 0}
+
+
+def _ai_regime():
+    """60m trend regime for the AI-trader gate: EMA20 vs EMA50 on hourly
+    candles with a dead-band (0.25 x 14-bar ATR) so flat, undecided
+    markets allow both directions. +1 bull, -1 bear, 0 undecided.
+    Backtest (71 setups, 2.3 months): with-trend 50% / +0.00R vs
+    counter-trend 37% / -0.28R — and BOTH recorded AI losses were
+    counter-trend sells in a BULL 60m regime."""
+    if time.time() - _ai_regime_mem["t"] < 60:
+        return _ai_regime_mem["v"]
+    v = 0
+    try:
+        cl = data.get_candles("60m").get("candles") or []
+        if len(cl) >= 60:
+            c = [float(k["c"]) for k in cl[-120:]]
+            k20, k50 = 2 / 21, 2 / 51
+            e20 = e50 = c[0]
+            for x in c:
+                e20 += k20 * (x - e20)
+                e50 += k50 * (x - e50)
+            h = [float(k["h"]) for k in cl[-14:]]
+            l = [float(k["l"]) for k in cl[-14:]]
+            atr14 = sum(hi - lo for hi, lo in zip(h, l)) / 14
+            if abs(e20 - e50) > 0.25 * max(atr14, 0.01):
+                v = 1 if e20 > e50 else -1
+    except Exception:  # noqa: BLE001
+        v = 0
+    _ai_regime_mem.update(t=time.time(), v=v)
+    return v
 
 
 def ai_trader(force=False, auto=False):
@@ -3385,6 +3432,22 @@ def ai_trader(force=False, auto=False):
                               "standing aside", invalidation="")
         sig.update(t=int(time.time()), provider=p["name"], model=model,
                    spot=round(spot, 2), atr=atr)
+        # ---- v2.9.12 REGIME GATE: never trade against the 60m trend.
+        #      The losing cohort of the AI journal (both losses) and of
+        #      the 71-setup backtest. Blocked calls stand aside with the
+        #      reason visible in the panel.
+        if sig["direction"] in ("buy", "sell"):
+            rg = _ai_regime()
+            against = (sig["direction"] == "buy" and rg < 0) or \
+                      (sig["direction"] == "sell" and rg > 0)
+            if against:
+                sig = dict(direction="none", conf=sig.get("conf"),
+                           style=sig.get("style"),
+                           thesis=(f"{(sig.get('thesis') or '')[:140]} "
+                                   "— DESK BLOCK: counter-trend vs the 60m "
+                                   "regime (losing cohort: 37% win / "
+                                   "-0.28R). Standing aside."),
+                           invalidation=sig.get("invalidation", ""))
         try:                                   # confluence with the desk
             _d = get_ai_desk() or {}
             _cl = str(((_d.get("consensus") or {}).get("label"))
@@ -3401,7 +3464,10 @@ def ai_trader(force=False, auto=False):
             except Exception:  # noqa: BLE001  — never kill the call
                 pass
         _ai_trader_mem.update(t=sig["t"], sig=sig, lastErr=None)
-        if force or (auto and sig["direction"] != "none"):
+        open_n = sum(1 for t in (STATE.get("aiTrades") or [])
+                      if t.get("status") == "open")
+        crowded = open_n >= 4
+        if force or (auto and sig["direction"] != "none" and not crowded):
             pk = f"{sig['direction']}:{sig.get('entry')}:{sig.get('stop')}"
             lp = _ai_trader_mem["lastPost"]
             if force or (pk != lp["key"] or time.time() - lp["t"] > 2700):

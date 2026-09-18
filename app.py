@@ -78,8 +78,15 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "2.9.12"
+SYSTEM_VERSION = "2.9.13"
 SYSTEM_CHANGELOG = {
+    "2.9.13": [
+        "AI Council: four independent models (GPT-oss 120B, GPT-oss 20B, "
+        "Qwen 3.8 27B, Compound mini) now analyze every brief in parallel "
+        "— a majority with median entry/stop/target becomes the call, a "
+        "split council stands aside, and a per-model leaderboard tracks "
+        "which analyst is actually right (visible in /api/ai/trader)",
+    ],
     "2.9.12": [
         "Lossless discipline: AI-trader calls are hard-blocked against "
         "the 60m trend regime (the exact cohort that produced both "
@@ -3205,6 +3212,35 @@ def _ai_trader_post(sig):
 AI_TRADE_MAX = 50          # tracked AI calls kept (newest first)
 AI_FILL_BARS = 16          # bars a limit/stop entry gets to fill (4h —
                            # an intraday thesis is stale after that)
+
+# ---- AI COUNCIL: several independent models analyze the same brief in
+# parallel; a majority with median levels becomes the desk's call. One
+# free Groq key runs them all. Override with AI_COUNCIL_MODELS
+# ("id:Name,id:Name") or disable with AI_COUNCIL_MODELS=off.
+AI_COUNCIL = [
+    ("openai/gpt-oss-120b", "GPT-oss 120B"),
+    ("openai/gpt-oss-20b", "GPT-oss 20B"),
+    ("qwen/qwen3.8-27b", "Qwen 3.8 27B"),
+    ("groq/compound-mini", "Compound mini"),
+]
+
+
+def _council_models():
+    raw = (os.environ.get("AI_COUNCIL_MODELS") or "").strip()
+    if not raw:
+        return list(AI_COUNCIL)
+    if raw.lower() in ("off", "none", "0"):
+        return []
+    out = []
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        mid, _, name = part.rpartition(":")
+        if not mid:
+            mid, name = part, part.split("/")[-1]
+        out.append((mid, name or mid))
+    return out
 AI_HOLD_BARS = 48          # bars after fill before mark-to-market (12h)
 
 
@@ -3225,6 +3261,7 @@ def _ai_trader_record(sig):
             stop=sig["stop"], target=sig["target"], rr=sig["rr"],
             conf=sig["conf"], style=sig.get("style"), spot=sig.get("spot"),
             model=sig.get("model"), thesis=(sig.get("thesis") or "")[:200],
+            votes=sig.get("votes"),
             status="open", fillT=None, exitT=None, r=None))
         del trades[AI_TRADE_MAX:]
         _save_state()
@@ -3327,6 +3364,31 @@ def _ai_trader_stats():
                 avgR=round(sum(rs) / len(rs), 2))
 
 
+def _ai_council_stats():
+    """Per-model leaderboard: direction hit-rate on resolved council
+    trades (a model 'hits' when its voted direction was the profitable
+    one). Timeouts don't count — only decided outcomes."""
+    board = {}
+    for tr in (STATE.get("aiTrades") or []):
+        if tr.get("status") not in ("win", "loss") or not tr.get("votes"):
+            continue
+        r = tr.get("r")
+        if not isinstance(r, (int, float)) or r == 0:
+            continue
+        good = (tr["direction"] if r > 0 else
+                ("sell" if tr["direction"] == "buy" else "buy"))
+        for v in tr["votes"]:
+            if v.get("dir") in ("buy", "sell"):
+                b = board.setdefault(v["model"], dict(n=0, hit=0))
+                b["n"] += 1
+                if v["dir"] == good:
+                    b["hit"] += 1
+    return sorted((dict(model=m, n=d["n"],
+                        hitPct=round(100 * d["hit"] / d["n"]))
+                   for m, d in board.items()),
+                  key=lambda x: (-x["hitPct"], -x["n"]))
+
+
 def _ai_trades_merge(remote, local):
     """Cloud merge for tracked AI calls: union by call key; a resolved
     copy beats an open one; local wins ties; newest first, cap 50."""
@@ -3384,6 +3446,88 @@ def _ai_regime():
     return v
 
 
+def _ai_council_call(key, models, brief, sys_txt, spot, atr):
+    """Query every council model in parallel with the SAME brief. Each
+    reply passes the same risk checks as a solo call; failures and
+    invalid replies simply abstain. Returns the list of valid votes."""
+    import llm_desk
+    votes, lock = [], threading.Lock()
+
+    def worker(mid, name):
+        try:
+            txt = llm_desk._call_groq(key, mid, brief, sys_txt)
+            sig = _ai_trader_check(_ai_trader_parse(txt), spot, atr)
+        except Exception:  # noqa: BLE001  — this seat abstains
+            return
+        if sig:
+            with lock:
+                votes.append(dict(id=mid, name=name, sig=sig))
+
+    ths = [threading.Thread(target=worker, args=(mid, name), daemon=True)
+           for mid, name in models]
+    for t in ths:
+        t.start()
+    for t in ths:
+        t.join(35)
+    return votes
+
+
+def _ai_council_merge(votes):
+    """Combine valid votes into one call: a DIRECTION needs a majority
+    of at least 2 and strictly more than the opposite side; entry/stop/
+    target are the MEDIAN of the agreeing members (robust to one wild
+    model). Split councils stand aside — no edge, no trade."""
+    buys = [v for v in votes if v["sig"]["direction"] == "buy"]
+    sells = [v for v in votes if v["sig"]["direction"] == "sell"]
+    aside = [v for v in votes if v["sig"]["direction"] == "none"]
+    vlist = [dict(model=v["name"], dir=v["sig"]["direction"],
+                  entry=v["sig"].get("entry"),
+                  conf=v["sig"].get("conf")) for v in votes]
+    if not buys and not sells:
+        return dict(direction="none", conf=0.5, style="intraday",
+                    thesis=("AI council: all members stand aside ("
+                            + " · ".join(v["name"] for v in votes) + ")"),
+                    invalidation="", votes=vlist)
+    side, n = ("buy", len(buys)) if len(buys) >= len(sells) else ("sell",
+                                                                  len(sells))
+    other = len(sells) if side == "buy" else len(buys)
+    if n < 2 or n <= other:
+        return dict(direction="none", conf=0.5, style="intraday",
+                    thesis=(f"AI council split — {len(buys)} buy / "
+                            f"{len(sells)} sell / {len(aside)} aside: "
+                            + " · ".join(f"{v['name']} {v['sig']['direction']}"
+                                         for v in votes)
+                            + ". No edge, standing aside."),
+                    invalidation="", votes=vlist)
+    agree = buys if side == "buy" else sells
+
+    def med(k):
+        xs = sorted(float(v["sig"][k]) for v in agree)
+        n = len(xs)
+        return (xs[n // 2] if n % 2
+                else round((xs[n // 2 - 1] + xs[n // 2]) / 2, 2))
+
+    entry, stop, target = med("entry"), med("stop"), med("target")
+    risk = abs(entry - stop) or 1.0
+    rr = round(abs(target - entry) / risk, 2)
+    if rr < 1.1:                    # merged levels too tight — widen TP
+        target = entry + (1 if side == "buy" else -1) * 1.5 * risk
+        rr = 1.5
+    conf = round(sum((v["sig"].get("conf") or 0.5) for v in agree)
+                 / len(agree), 2)
+    thesis = (f"AI council {n}/{len(votes)} {side.upper()} — median entry "
+              f"{entry:,.2f}: "
+              + " · ".join(f"{v['name']} {v['sig']['direction']}"
+                           f"@{v['sig'].get('entry', 0):,.0f}"
+                           for v in votes))
+    riskatr = round(sum(float(v["sig"].get("riskAtr") or 1.0)
+                        for v in agree) / len(agree), 2)
+    return dict(direction=side, entry=round(entry, 2), stop=round(stop, 2),
+                target=round(target, 2), rr=rr, conf=conf, style="intraday",
+                riskAtr=riskatr,
+                thesis=thesis[:400], invalidation="", votes=vlist)
+
+
 def ai_trader(force=False, auto=False):
     """Generate the AI trader's best signal. force=True re-runs even if
     a fresh call exists (the panel button); auto=True is the hourly
@@ -3411,26 +3555,45 @@ def ai_trader(force=False, auto=False):
         call = llm_desk._CALLS[k]
         sys_txt = (_AI_TRADER_SYS + f" Current spot {spot:,.2f}, 15m ATR "
                    f"{atr} — entry/stop/target must be consistent.")
-        txt = sig = None
-        for _attempt in (1, 2):               # one corrective retry
+        council = _council_models()
+        votes = []
+        if k == "groq" and len(council) >= 2:
             try:
-                txt = call(key, model, brief, sys_txt)
-            except Exception as e:  # noqa: BLE001
-                _ai_trader_mem["lastErr"] = str(e)[:200]
-                return None
-            sig = _ai_trader_check(_ai_trader_parse(txt), spot, atr)
-            if sig:
-                break
-            brief += ("\n\nYour previous reply was rejected: it must be "
-                      "compact JSON with direction/entry/stop/target "
-                      "consistent with the spot and ATR (stop 0.25-4 ATR "
-                      "away, reward >= 1.1x risk), or direction \"none\". "
-                      "Call your best trade again.")
+                votes = _ai_council_call(key, council, brief, sys_txt,
+                                         spot, atr)
+            except Exception:  # noqa: BLE001  — council is best-effort
+                votes = []
+        if len(votes) >= 2:
+            sig = _ai_council_merge(votes)
+        else:
+            txt = sig = None
+            for _attempt in (1, 2):           # solo: one corrective retry
+                try:
+                    txt = call(key, model, brief, sys_txt)
+                except Exception as e:  # noqa: BLE001
+                    _ai_trader_mem["lastErr"] = str(e)[:200]
+                    return None
+                sig = _ai_trader_check(_ai_trader_parse(txt), spot, atr)
+                if sig:
+                    break
+                brief += ("\n\nYour previous reply was rejected: it must be "
+                          "compact JSON with direction/entry/stop/target "
+                          "consistent with the spot and ATR (stop 0.25-4 "
+                          "ATR away, reward >= 1.1x risk), or direction "
+                          "\"none\". Call your best trade again.")
         if not sig:
             sig = dict(direction="none", conf=0.5, style="intraday",
                        thesis="model reply did not pass the risk checks — "
                               "standing aside", invalidation="")
-        sig.update(t=int(time.time()), provider=p["name"], model=model,
+        if sig.get("votes"):
+            na = sum(1 for v in sig["votes"]
+                     if v.get("dir") == sig["direction"])
+            mlabel = (f"AI council {na}/{len(sig['votes'])}"
+                      if sig["direction"] in ("buy", "sell")
+                      else f"AI council ({len(sig['votes'])} split)")
+        else:
+            mlabel = model
+        sig.update(t=int(time.time()), provider=p["name"], model=mlabel,
                    spot=round(spot, 2), atr=atr)
         # ---- v2.9.12 REGIME GATE: never trade against the 60m trend.
         #      The losing cohort of the AI journal (both losses) and of
@@ -3447,7 +3610,8 @@ def ai_trader(force=False, auto=False):
                                    "— DESK BLOCK: counter-trend vs the 60m "
                                    "regime (losing cohort: 37% win / "
                                    "-0.28R). Standing aside."),
-                           invalidation=sig.get("invalidation", ""))
+                           invalidation=sig.get("invalidation", ""),
+                           votes=sig.get("votes"))
         try:                                   # confluence with the desk
             _d = get_ai_desk() or {}
             _cl = str(((_d.get("consensus") or {}).get("label"))
@@ -4871,7 +5035,8 @@ def _ai_trader_payload(sig=None):
     return jsonify(sig=s, busy=_ai_trader_mem["busy"],
                    err=_ai_trader_mem.get("lastErr"),
                    trades=(STATE.get("aiTrades") or [])[:8],
-                   stats=_ai_trader_stats())
+                   stats=_ai_trader_stats(),
+                   council=_ai_council_stats())
 
 
 @app.route("/api/ai/trader")

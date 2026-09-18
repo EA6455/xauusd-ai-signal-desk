@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>XAUUSD SNR Desk · TradingView Indicators</title>
+<title>INDICATOR · XAUUSD</title>
 <style>
   :root{ --bg:#070a10; --card:#101624; --border:#1b2536; --text:#e9edf5;
     --muted:#8b95a8; --gold:#eab54f; --green:#26d36f; --cyan:#22d3ee;
@@ -69,8 +69,8 @@
 </head>
 <body>
 <div class="wrap">
-  <div class="brand">XAUUSD SNR DESK</div>
-  <div class="sub">TradingView Indicators · one-click copy</div>
+  <div class="brand">INDICATOR</div>
+  <div class="sub">XAUUSD · one-click copy</div>
 
   <div class="card">
     <h1>① <span class="n">A+ SNIPER</span> — strict 8/8</h1>
@@ -108,27 +108,6 @@
     <pre class="src" id="src2"><span style="color:var(--muted)">loading source…</span></pre>
   </div>
 
-  <div class="card" style="border-color:rgba(20,184,166,.4)">
-    <h1>📦 How to trade the zone boxes (FLOW)</h1>
-    <p style="margin-top:6px"><b style="color:var(--green)">SOLID box — no text (FRESH)</b><br>
-      An untested institutional zone. <b>This is where A+ signals come from.</b>
-      When the indicator prints ▲ LONG / ▼ SHORT with entry, SL and TP lines from a solid box —
-      that's the trade. Full size, follow the drawn levels: half off at TP1 (0.75R),
-      stop to breakeven, runner to TP2 (1.5R).</p>
-    <p style="margin-top:10px"><b style="color:var(--teal)">DASHED box — "TESTED · rev only"</b><br>
-      The zone absorbed one retest — about half its power is spent.
-      <b>Trade it only as a reversal:</b> wait for a confirmation candle (engulfing / pin) at the box edge,
-      enter on its close, stop beyond the box, and take the smaller target (TP1 only, ~0.75R).
-      Smaller size than FRESH trades. This is the REV cohort — 92% win when the retest confirms.</p>
-    <p style="margin-top:10px"><b style="color:var(--muted)">GRAY box — "WEAK · break watch"</b><br>
-      Consumed — multiple touches. <b>Do NOT buy/sell at this box expecting a bounce.</b>
-      Instead use it as a breakout map: when price pushes into a WEAK zone,
-      a clean break through it often accelerates — breakout traders set stops on the far side
-      and ride the continuation. No signal fires from a WEAK box.</p>
-    <p style="margin-top:10px"><b>Box disappears</b> = the zone broke — the move usually extends.
-      Fresh boxes forming = the market is building new ammunition; wait for the signal.</p>
-  </div>
-
   <div class="card" style="border-color:rgba(96,165,250,.4)">
     <h1>③ <span style="color:#60a5fa">FRT</span> — Zone Health Scout · boxes only</h1>
     <p><b>FRESH · TESTED · WEAK</b> zone boxes and nothing else — no signals, no alerts, no dashboard.
@@ -150,27 +129,6 @@
     <div class="meta"><span id="mchars3">…</span><span id="mlines3">…</span></div>
     <pre class="src" id="src3"><span style="color:var(--muted)">loading source…</span></pre>
   </div>
-
-  <div class="card">
-    <h1>⚡ Install — 2 minutes each</h1>
-    <ol class="steps">
-      <li>Tap the <b>COPY</b> button of the indicator you want
-          <small>the entire Pine Script is now in your clipboard</small></li>
-      <li>Open TradingView → XAUUSD → your chart
-          <small>SNIPER: 15m main + 1H + 4H · FLOW: 15m ·
-          <a href="https://www.tradingview.com/chart/?symbol=OANDA%3AXAUUSD" target="_blank" rel="noopener">open the chart ↗</a></small></li>
-      <li>Open <b>Pine Editor</b> (bottom bar) → paste → <b>Save</b> → <b>Add to chart</b>
-          <small>delete any demo code in the editor before pasting; each indicator gets its own chart tab or pane slot</small></li>
-      <li>Set alerts on the indicator's conditions
-          <small>SNIPER: "A+ LONG/SHORT setup" · FLOW: also "REV LONG/SHORT setup"</small></li>
-    </ol>
-    <div class="row">
-      <a class="tvlink" href="https://www.tradingview.com/chart/?symbol=OANDA%3AXAUUSD" target="_blank" rel="noopener">Open XAUUSD chart ↗</a>
-      <a class="tvlink" href="/" style="color:var(--gold); border-color:rgba(234,181,79,.45)">← Back to the desk</a>
-    </div>
-  </div>
-</div>
-
 <script>
 (() => {
   function wire(btnId, hintId, preId, charsId, linesId, url, okText){

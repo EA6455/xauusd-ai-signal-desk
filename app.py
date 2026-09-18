@@ -78,8 +78,17 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "10.14"
+SYSTEM_VERSION = "10.15"
 SYSTEM_CHANGELOG = {
+    "10.15": [
+        "Website renamed to INDICATOR: the front page now shows ONLY "
+        "the three indicators with one-click copy \u2014 the box guide "
+        "and install cards are gone, the page is nothing but the "
+        "indicators. The full signal desk (signals, journal, MT5) "
+        "moved to /desk, and the old \u2018RENDER TRADING CHART\u2019 "
+        "name is retired everywhere (desk is now \u2018XAUUSD SNR "
+        "DESK\u2019, app manifest \u2018XAUUSD INDICATOR\u2019)",
+    ],
     "10.14": [
         "FRT TradingView indicator buffed with a full option set (16 "
         "inputs, still boxes-only and strictly non-repainting): show/hide "
@@ -5154,6 +5163,16 @@ def cors_preflight(path=""):
 
 @app.route("/")
 def index():
+    """The website is INDICATOR now — the front page shows ONLY the
+    three indicators with one-click copy. The full signal desk
+    (signals, journal, MT5) lives at /desk."""
+    start_background()
+    return render_template("indicator.html")
+
+
+@app.route("/desk")
+def desk_page():
+    """The full signal dashboard — used by the desk owner."""
     start_background()
     payload = None
     try:

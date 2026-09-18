@@ -78,8 +78,14 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "2.9.2"
+SYSTEM_VERSION = "2.9.3"
 SYSTEM_CHANGELOG = {
+    "2.9.3": [
+        "Consolidated-index pricing: median of venue levels + the fastest "
+        "feed's live motion — the displayed price now moves at tape speed "
+        "(several updates per second) while staying pinned to the "
+        "cross-market level, with a $3 spike guard",
+    ],
     "2.9.2": [
         "Price engine: displayed spot recomputed at 4Hz in the background "
         "— the live stream now pushes at tape density instead of waiting "

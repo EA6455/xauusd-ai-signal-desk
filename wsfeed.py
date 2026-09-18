@@ -55,26 +55,56 @@ def _feed(name):
         _feeds[name] = f
     return f
 
+def _median(xs):
+    xs = sorted(xs)
+    n = len(xs)
+    if n % 2:
+        return xs[n // 2]
+    return (xs[n // 2 - 1] + xs[n // 2]) / 2.0
+
+
+_levels = {}          # feed -> slow EMA of its mid (the venue's "level")
+
 
 def _merged_locked(now):
-    """Median of the fresh feed mids — a stable level that updates the
-    instant ANY stream ticks. Falls back to the single freshest feed."""
-    mids = []
-    for f in _feeds.values():
-        if f["bid"] and f["ask"] and now - f["t"] < FRESH_S:
-            mids.append((f["bid"] + f["ask"]) / 2.0)
-    if len(mids) >= 2:
-        mids.sort()
-        n = len(mids)
-        if n % 2:
-            return mids[n // 2]
-        return (mids[n // 2 - 1] + mids[n // 2]) / 2.0   # even: mean
-    best = None
-    for f in _feeds.values():
-        if f["bid"] and f["ask"] and now - f["t"] < STALE_S \
-                and (best is None or f["t"] > best[1]):
-            best = ((f["bid"] + f["ask"]) / 2.0, f["t"])
-    return best[0] if best else None
+    """Consolidated-index price, like a professional terminal:
+
+      base = median of the feeds' SLOW LEVELS (each venue's EMA) — the
+             honest cross-market level; no single venue's premium can
+             push it, no ping-pong between venues
+      dev  = the FRESHEST feed's live deviation from its own level —
+             the motion of the market right now
+
+    displayed = base + dev. The result moves at the speed of the
+    fastest stream while staying pinned to the consensus level."""
+    fresh_m, fresh_t, fresh_name = None, 0.0, None
+    levels = []
+    for name, f in _feeds.items():
+        if not (f["bid"] and f["ask"]):
+            continue
+        age = now - f["t"]
+        if age >= STALE_S:
+            continue
+        m = (f["bid"] + f["ask"]) / 2.0
+        e = _levels.get(name)
+        e = m if e is None else e + 0.02 * (m - e)      # slow venue level
+        _levels[name] = e
+        if age < FRESH_S:
+            levels.append(e)
+        if f["t"] > fresh_t:
+            fresh_m, fresh_t, fresh_name = m, f["t"], name
+    if fresh_m is None:
+        return None
+    if levels:
+        base = _median(levels)
+    else:
+        base = _levels[fresh_name]
+    dev = fresh_m - _levels[fresh_name]                 # live motion
+    if dev > 3.0:
+        dev = 3.0                                       # spike guard
+    elif dev < -3.0:
+        dev = -3.0
+    return base + dev
 
 
 def _apply(name, bid=None, ask=None, last=None):

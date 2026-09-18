@@ -78,8 +78,15 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "2.9.10"
+SYSTEM_VERSION = "2.9.11"
 SYSTEM_CHANGELOG = {
+    "2.9.11": [
+        "Permanent TV lock: the level pusher now runs as its own "
+        "always-on service (separate IP, immune to scanner bans and to "
+        "research-machine reboots); fixed a cooldown bug that made the "
+        "desk hammer the scanner while throttled; mutual keepalive "
+        "pings keep both free services awake 24/7",
+    ],
     "2.9.10": [
         "Always-matched prices: the research machine now streams "
         "TradingView's level to the production desk every 3s (separate "
@@ -1676,22 +1683,39 @@ def _tv_spot_loop():
     429-throttle, cool down hard (1 → 5 → 15 min) before trying again.
     The research machine's pusher (see _tv_pusher) keeps the lock alive
     from a different IP while this one is in cooldown."""
-    delay = 6.0
+    base = 8.0
+    delay = base
     while True:
-        ok = False
+        t0 = _tv_spot_mem["t"]
         try:
-            ok = _tv_spot(force=True) is not None
+            _tv_spot(force=True)
         except Exception:  # noqa: BLE001
-            ok = False
-        if ok:
-            delay = 6.0
+            pass
+        ok = _tv_spot_mem["t"] > t0     # fresh sample landed? (the call
+        if ok:                          # returns the STALE price on errors)
+            delay = base
         else:
-            delay = 60.0 if delay <= 6.0 else min(900.0, delay * 3)
+            delay = 60.0 if delay <= base else min(900.0, delay * 3)
         _tv_spot_mem["pollDelay"] = round(delay, 1)
         time.sleep(delay)
 
 
 PROD_URL = "https://render-trading-chart-desk.onrender.com"
+
+
+def _pusher_keepalive():
+    """Ping the TV level pusher service every 5 minutes so its free
+    instance never idles to sleep (and its 3s pushes keep THIS desk
+    awake in return — mutual keepalive between the two services)."""
+    import urllib.request
+    url = os.environ.get("PUSHER_URL", "").rstrip("/")
+    while True:
+        if url:
+            try:
+                urllib.request.urlopen(url + "/health", timeout=8).read()
+            except Exception:  # noqa: BLE001
+                pass
+        time.sleep(300)
 
 
 def _tv_pusher():
@@ -4020,6 +4044,8 @@ def start_background():
     threading.Thread(target=_tv_spot_loop, daemon=True).start()
     if os.environ.get("TV_PUSHER") == "1":
         threading.Thread(target=_tv_pusher, daemon=True).start()
+    if os.environ.get("PUSHER_URL"):
+        threading.Thread(target=_pusher_keepalive, daemon=True).start()
 
 
 # ------------------------------------------------- cross-deploy persistence

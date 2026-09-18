@@ -78,8 +78,16 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "10.6"
+SYSTEM_VERSION = "10.7"
 SYSTEM_CHANGELOG = {
+    "10.7": [
+        "TradingView indicator upgrade: every confirmed setup now draws "
+        "the FULL trade on the chart — ▲ LONG and ▼ SHORT labels, entry "
+        "line, stop-loss line, TP1/TP2 lines, a green profit zone and a "
+        "red risk zone — so members can trade exactly what they see, "
+        "both directions, A+ only. Alerts renamed to 'A+ LONG setup' / "
+        "'A+ SHORT setup'",
+    ],
     "10.6": [
         "The TradingView indicator now has a big glowing TV INDICATOR "
         "button in the site header on every screen — one tap to the "

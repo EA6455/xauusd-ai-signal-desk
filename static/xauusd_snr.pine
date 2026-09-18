@@ -16,6 +16,9 @@
 //    · session        dead hours (21:00-01:00 UTC) filtered
 //    · grade          A+ ONLY — 8/8 checks or no signal (no B+/C+)
 //    · exit profile   half off at TP1 0.75R, stop to BE, runner 1.5R
+//    · trade drawing  every LONG/SHORT setup draws the full trade on the
+//                     chart: entry line, SL line, TP1/TP2 lines, green
+//                     profit zone and red risk zone — trade what you see
 //
 //  Set alerts on "A+ BUY setup" / "A+ SELL setup".
 //  Not financial advice — the desk scores every signal honestly at
@@ -91,6 +94,13 @@ var zSignaled = array.new_bool(0)
 var zCreated = array.new_int(0)
 var zBox = array.new_box(0)
 var sigLbls = array.new_label(0)
+// per-trade drawings (capped — oldest deleted)
+var tEntry = array.new_line(0)
+var tSL = array.new_line(0)
+var tTP1 = array.new_line(0)
+var tTP2 = array.new_line(0)
+var tPBox = array.new_box(0)
+var tRBox = array.new_box(0)
 
 // dashboard state (last evaluated touch)
 var string dashGrade = ""
@@ -302,7 +312,28 @@ if array.size(zTop) > 0
                     dashT1 := tp1P
                     dashT2 := tp2P
                     col = d == 1 ? color.new(color.green, 10) : color.new(color.red, 10)
-                    txt = "A+ " + (d == 1 ? "BUY" : "SELL") + "\nE " + str.tostring(entryP, "#.##") + "\nSL " + str.tostring(slP, "#.##") + "\nTP1 " + str.tostring(tp1P, "#.##") + "\nTP2 " + str.tostring(tp2P, "#.##")
+                    txt = (d == 1 ? "▲ LONG · A+" : "▼ SHORT · A+") + "\nE " + str.tostring(entryP, "#.##") + "\nSL " + str.tostring(slP, "#.##") + "\nTP1 " + str.tostring(tp1P, "#.##") + "\nTP2 " + str.tostring(tp2P, "#.##")
+                    // ---- draw the FULL trade: entry/SL/TP lines + zones
+                    if array.size(tEntry) >= 12
+                        line.delete(array.get(tEntry, 0))
+                        line.delete(array.get(tSL, 0))
+                        line.delete(array.get(tTP1, 0))
+                        line.delete(array.get(tTP2, 0))
+                        box.delete(array.get(tPBox, 0))
+                        box.delete(array.get(tRBox, 0))
+                        array.remove(tEntry, 0)
+                        array.remove(tSL, 0)
+                        array.remove(tTP1, 0)
+                        array.remove(tTP2, 0)
+                        array.remove(tPBox, 0)
+                        array.remove(tRBox, 0)
+                    ext = bar_index + 34
+                    array.push(tEntry, line.new(bar_index, entryP, ext, entryP, color = color.new(color.blue, 0), width = 2))
+                    array.push(tSL, line.new(bar_index, slP, ext, slP, color = color.new(color.red, 0), width = 2, style = line.style_dashed))
+                    array.push(tTP1, line.new(bar_index, tp1P, ext, tp1P, color = color.new(color.green, 35), width = 1))
+                    array.push(tTP2, line.new(bar_index, tp2P, ext, tp2P, color = color.new(color.green, 0), width = 2))
+                    array.push(tPBox, box.new(bar_index, math.max(entryP, tp2P), ext, math.min(entryP, tp2P), bgcolor = color.new(color.green, 84), border_color = color.new(color.green, 45)))
+                    array.push(tRBox, box.new(bar_index, math.max(entryP, slP), ext, math.min(entryP, slP), bgcolor = color.new(color.red, 82), border_color = color.new(color.red, 50)))
                     array.push(sigLbls, label.new(bar_index, d == 1 ? low : high, txt, style = d == 1 ? label.style_label_up : label.style_label_down, color = col, textcolor = color.white, size = size.small))
                     if array.size(sigLbls) > 40
                         label.delete(array.get(sigLbls, 0))
@@ -334,8 +365,8 @@ if array.size(hiIdx) > 0
             array.remove(hiPriorLo, i)
 
 // ---- plots, shading, dashboard -------------------------------------------------
-plotshape(aPlusBuy,  style = shape.triangleup,   location = location.belowbar, color = color.new(color.green, 0), size = size.small, title = "A+ BUY")
-plotshape(aPlusSell, style = shape.triangledown, location = location.abovebar, color = color.new(color.red, 0),   size = size.small, title = "A+ SELL")
+plotshape(aPlusBuy,  style = shape.triangleup,   location = location.belowbar, color = color.new(color.green, 0), size = size.small, title = "A+ LONG")
+plotshape(aPlusSell, style = shape.triangledown, location = location.abovebar, color = color.new(color.red, 0),   size = size.small, title = "A+ SHORT")
 bgcolor(showSess and sessDead ? color.new(color.gray, 94) : na)
 
 f_ok(c) =>
@@ -371,5 +402,5 @@ if showDash and barstate.islast
         table.cell(dash, 1, 11, "E " + str.tostring(dashE, "#.##") + " · SL " + str.tostring(dashS, "#.##") + " · TP " + str.tostring(dashT1, "#.##") + "/" + str.tostring(dashT2, "#.##"), text_color = color.new(color.white, 0), text_size = size.tiny)
 
 // ---- alerts --------------------------------------------------------------------
-alertcondition(aPlusBuy,  "A+ BUY setup",  "XAUUSD SNR Desk: A+ BUY setup confirmed — check the desk for the full card")
-alertcondition(aPlusSell, "A+ SELL setup", "XAUUSD SNR Desk: A+ SELL setup confirmed — check the desk for the full card")
+alertcondition(aPlusBuy,  "A+ LONG setup",  "XAUUSD SNR Desk: A+ LONG setup confirmed — entry, SL and TPs drawn on chart; full card in the group")
+alertcondition(aPlusSell, "A+ SHORT setup", "XAUUSD SNR Desk: A+ SHORT setup confirmed — entry, SL and TPs drawn on chart; full card in the group")

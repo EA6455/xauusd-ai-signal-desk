@@ -78,8 +78,16 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "2.9.13"
+SYSTEM_VERSION = "2.9.14"
 SYSTEM_CHANGELOG = {
+    "2.9.14": [
+        "All-AI multiplier: the analyst desk's LLM seat is now a council "
+        "too — GPT-oss 120B, GPT-oss 20B, Qwen 3.8 27B and Compound mini "
+        "each give their own verdict on the consensus meter (12 analysts "
+        "total), and every resolved trade now gets an AI coach autopsy: "
+        "a concrete lesson stored on the journal record and posted to "
+        "the signal feed",
+    ],
     "2.9.13": [
         "AI Council: four independent models (GPT-oss 120B, GPT-oss 20B, "
         "Qwen 3.8 27B, Compound mini) now analyze every brief in parallel "
@@ -3268,6 +3276,57 @@ def _ai_trader_record(sig):
     cloud_save(force=True)
 
 
+def _ai_trade_coach(tr):
+    """AI post-trade coach: an LLM autopsy of every resolved AI trade —
+    what the setup did right and the one concrete thing to watch next
+    time. Stored on the journal record (panel shows it) and posted as
+    a short note. Runs in its own thread; never blocks resolution."""
+    try:
+        import llm_desk
+        if "groq" not in llm_desk.configured():
+            return
+        key = os.environ.get("GROQ_API_KEY")
+        outcome, r = tr.get("status"), tr.get("r") or 0.0
+        fill_t = tr.get("fillT") or tr.get("t") or time.time()
+        dur = max(0.0, ((tr.get("exitT") or time.time()) - fill_t) / 3600)
+        votes = ", ".join(f"{v.get('model')}:{v.get('dir')}"
+                          for v in (tr.get("votes") or [])) or "solo call"
+        user = (
+            "Resolved XAUUSD trade autopsy.\n"
+            f"Direction {tr.get('direction')}, entry {tr.get('entry')}, "
+            f"stop {tr.get('stop')}, target {tr.get('target')} "
+            f"(R:R 1:{tr.get('rr')}).\n"
+            f"Thesis: {(tr.get('thesis') or '')[:180]}\n"
+            f"AI council votes: {votes}\n"
+            f"Outcome: {outcome} {float(r):+.2f}R after {dur:.1f}h in trade.\n"
+            "Reply with ONLY compact JSON, no markdown: "
+            "{\"lesson\": \"max 30 words, trader-to-trader, concrete: "
+            "what worked or what to watch next time\"}")
+        txt = llm_desk._call_groq(
+            key, "openai/gpt-oss-120b", user,
+            "You are a pragmatic gold trading coach. Be specific, never "
+            "generic. Do not congratulate or moralize.")
+        lesson = ""
+        if txt:
+            a, b = txt.find("{"), txt.rfind("}")
+            if 0 <= a < b:
+                try:
+                    lesson = str(json.loads(txt[a:b + 1]).get("lesson") or "")
+                except Exception:  # noqa: BLE001
+                    lesson = ""
+        lesson = lesson.strip()[:200]
+        if not lesson:
+            return
+        tr["coach"] = lesson
+        with STATE_LOCK:
+            _save_state()
+        _notify(
+            f"\U0001F393 COACH \u00b7 {str(tr.get('direction')).upper()} "
+            f"{outcome} {float(r):+.2f}R\n\n{lesson}", cat="signal")
+    except Exception:  # noqa: BLE001  — coaching is best-effort
+        pass
+
+
 def _ai_trader_resolve():
     """Score open AI calls against REAL 15m bars. Conservative rules,
     same as the engine's backtests: entry fills on touch (marketable
@@ -3344,6 +3403,8 @@ def _ai_trader_resolve():
                     f"result {tr['r']:+.2f}R \u00b7 record: {st['n']} "
                     f"calls, {st['winPct'] or 0}% win, "
                     f"{st['avgR'] or 0:+.2f}R avg", cat="signal")
+                threading.Thread(target=_ai_trade_coach, args=(tr,),
+                                 daemon=True).start()
     if changed:
         with STATE_LOCK:
             _save_state()

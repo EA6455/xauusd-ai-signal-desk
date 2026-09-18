@@ -40,6 +40,34 @@ REFRESH_S = 900.0      # each seat re-analyzes every 15 minutes (24/7)
 BACKOFF_S = 1800.0     # after a failure, that seat waits 30 minutes
 
 _mem = {k: dict(t=0.0, data=None, next_try=0.0) for k in PROVIDERS}
+
+# Groq seat runs as a COUNCIL: every model below analyzes the snapshot
+# independently and appears as its own analyst seat. Override with
+# LLM_COUNCIL_MODELS="id:Name,id:Name" or disable with =off.
+GROQ_COUNCIL = [
+    ("openai/gpt-oss-120b", "GPT-oss 120B"),
+    ("openai/gpt-oss-20b", "GPT-oss 20B"),
+    ("qwen/qwen3.8-27b", "Qwen 3.8 27B"),
+    ("groq/compound-mini", "Compound mini"),
+]
+
+
+def _council():
+    raw = (os.environ.get("LLM_COUNCIL_MODELS") or "").strip()
+    if not raw:
+        return list(GROQ_COUNCIL)
+    if raw.lower() in ("off", "none", "0"):
+        return []
+    out = []
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        mid, _, name = part.rpartition(":")
+        if not mid:
+            mid, name = part, part.split("/")[-1]
+        out.append((mid, name or mid))
+    return out
 _lock = threading.Lock()
 
 
@@ -154,14 +182,41 @@ def _one(k, user_txt):
             return
         m["t"] = now                      # claim the slot — one flight at a time
     try:
-        txt = _CALLS[k](key, model, user_txt)
-        data = _parse(txt)
-        if not data:
-            raise ValueError("unparseable reply")
-        data.update(model=model, t=int(now))
-        with _lock:
-            _mem[k]["data"] = data
-            _mem[k]["next_try"] = 0.0
+        council = _council() if k == "groq" else []
+        if council:
+            seats, lock = [], threading.Lock()
+
+            def worker(mid, name):
+                try:
+                    d = _parse(_call_groq(key, mid, user_txt))
+                except Exception:  # noqa: BLE001  — this seat abstains
+                    return
+                if d:
+                    with lock:
+                        seats.append(dict(verdict=d["verdict"], conf=d["conf"],
+                                          note=d["note"], model=name,
+                                          t=int(now)))
+
+            ths = [threading.Thread(target=worker, args=(mid, name),
+                                    daemon=True) for mid, name in council]
+            for t in ths:
+                t.start()
+            for t in ths:
+                t.join(30)
+            if not seats:
+                raise ValueError("no council replies")
+            with _lock:
+                _mem[k]["data"] = dict(council=seats)
+                _mem[k]["next_try"] = 0.0
+        else:
+            txt = _CALLS[k](key, model, user_txt)
+            data = _parse(txt)
+            if not data:
+                raise ValueError("unparseable reply")
+            data.update(model=model, t=int(now))
+            with _lock:
+                _mem[k]["data"] = data
+                _mem[k]["next_try"] = 0.0
     except Exception as e:  # noqa: BLE001
         with _lock:
             _mem[k]["next_try"] = now + BACKOFF_S
@@ -169,13 +224,22 @@ def _one(k, user_txt):
 
 
 def snapshot():
-    """Current external seats for the web payload (instant, cached)."""
+    """Current external seats for the web payload (instant, cached).
+    A council provider contributes one seat per member model."""
     seats = []
     for k in configured():
         with _lock:
             d = _mem[k]["data"]
-        if d:
+        if not d:
+            continue
+        if d.get("council"):
+            for s in d["council"]:
+                seats.append(dict(key=k, name=s["model"], icon=PROVIDERS[k]["icon"],
+                                  model=s["model"], verdict=s["verdict"],
+                                  conf=s["conf"], note=s["note"],
+                                  age=int(time.time() - s["t"])))
+        else:
             seats.append(dict(key=k, name=PROVIDERS[k]["name"], icon=PROVIDERS[k]["icon"],
                               model=d["model"], verdict=d["verdict"], conf=d["conf"],
                               note=d["note"], age=int(time.time() - d["t"])))
-    return dict(seats=seats, n=len(configured()), asOf=int(time.time()))
+    return dict(seats=seats, n=len(seats), asOf=int(time.time()))

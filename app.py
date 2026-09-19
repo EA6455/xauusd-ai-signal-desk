@@ -78,8 +78,16 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "10.19"
+SYSTEM_VERSION = "10.20"
 SYSTEM_CHANGELOG = {
+    "10.20": [
+        "PROOF timeframe guidance on the website card and in the topic: "
+        "15m main (the stack is measured on 15m and signals 1-2 land on "
+        "the same zones), 1H cleaner-but-slower, 4H structure, avoid "
+        "1-5m (noise + dead-session wicks) \u2014 and the scoreboard's "
+        "edge row is the honest per-chart verdict, compare it across "
+        "timeframes",
+    ],
     "10.19": [
         "PROOF card on the website now carries the full trading method: "
         "read the scoreboard first (edge vs raw gates everything), trade "

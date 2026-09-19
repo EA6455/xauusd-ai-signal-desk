@@ -211,7 +211,7 @@ if barstate.isconfirmed and array.size(zTop) > 0
         if broken or old > maxAge
             if broken and showBreaks
                 bP = s == 1 ? zb : zt
-                array.push(bMarks, label.new(bar_index, bP, "\u2715", style = label.style_none, color = color.new(color.gray, 100), textcolor = color.new(color.gray, 20), size = size.tiny))
+                array.push(bMarks, label.new(bar_index, bP, "✕", style = label.style_none, color = color.new(color.gray, 100), textcolor = color.new(color.gray, 20), size = size.tiny))
                 if array.size(bMarks) > 40
                     label.delete(array.get(bMarks, 0))
                     array.remove(bMarks, 0)

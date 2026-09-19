@@ -78,8 +78,16 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "10.20"
+SYSTEM_VERSION = "10.21"
 SYSTEM_CHANGELOG = {
+    "10.21": [
+        "PROOF road map: the scoreboard now shows the next zone up and "
+        "down with live stats and ATR distance, a NEXT STOP row (the "
+        "nearest untested magnet) and dotted path lines drawn on the "
+        "chart to both zones \u2014 a measured map of where price can "
+        "travel, not a prediction. Posted as PROOF v3 parts in the "
+        "INDICATOR topic",
+    ],
     "10.20": [
         "PROOF timeframe guidance on the website card and in the topic: "
         "15m main (the stack is measured on 15m and signals 1-2 land on "
@@ -4498,6 +4506,11 @@ def _announce_indicator():
         "Cohorts: 1st / 2nd / 3rd+ touch, plus a BASE RATE from raw pivot "
         "levels \u2014 so the scoreboard proves edge, not just movement. "
         "Small samples are flagged 'low n'. Never fake numbers.\n\n"
+        "ROAD MAP: the scoreboard shows the next zone up and down with "
+        "live stats and ATR distance, marks the likeliest NEXT STOP "
+        "(nearest untested magnet) and draws dotted paths to both zones "
+        "\u2014 a measured map of where price can travel, not a "
+        "prediction.\n"
         "No signals, no alerts. It upgrades \u2116 1-3: run it beside them "
         "and see which zones deserve your trust.\n"
         "One-click copy: the website front page.")

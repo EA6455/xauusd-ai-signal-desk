@@ -78,8 +78,15 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "10.18"
+SYSTEM_VERSION = "10.19"
 SYSTEM_CHANGELOG = {
+    "10.19": [
+        "PROOF card on the website now carries the full trading method: "
+        "read the scoreboard first (edge vs raw gates everything), trade "
+        "only FRESH zones with strong stats at the first touch, downgrade "
+        "position style as labels degrade, and use it to vet signals from "
+        "indicators 1-2. Guide also posted to the INDICATOR topic",
+    ],
     "10.18": [
         "PROOF compile fix: the script used an indicator() argument that "
         "does not exist in Pine (max_tables_count) \u2014 the Pine editor "

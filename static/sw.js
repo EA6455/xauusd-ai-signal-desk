@@ -1,4 +1,4 @@
-/* XAUUSD AI Signal Desk — service worker
+/* RENDER — service worker
    Network-first for the app shell (fresh code wins), cache fallback offline.
    API traffic is NEVER cached (live market data only). */
 const CACHE = "xauusd-desk-v2";

@@ -78,8 +78,14 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "10.23"
+SYSTEM_VERSION = "10.24"
 SYSTEM_CHANGELOG = {
+    "10.24": [
+        "Desk dashboard top bar renamed to RENDER (was 'XAUUSD SNR "
+        "DESK') \u2014 the whole site now carries the RENDER name: "
+        "front page RENDER INDICATOR, dashboard RENDER, same one-click "
+        "indicator copy",
+    ],
     "10.23": [
         "Website renamed to RENDER INDICATOR and now shows only two "
         "indicators: FLOW15mn and PROOF (one-click copy each). Pine "

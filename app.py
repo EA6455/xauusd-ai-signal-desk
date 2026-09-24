@@ -78,8 +78,17 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "10.22"
+SYSTEM_VERSION = "10.23"
 SYSTEM_CHANGELOG = {
+    "10.23": [
+        "Website renamed to RENDER INDICATOR and now shows only two "
+        "indicators: FLOW15mn and PROOF (one-click copy each). Pine "
+        "names cleaned \u2014 no XAUUSD prefix: the second TradingView "
+        "indicator is now FLOW15mn, the fourth is PROOF. A+ SNIPER and "
+        "FRT remain available in the INDICATOR topic and at /pine, "
+        "/pine3. Includes the PROOF v4 crash fix (road-map index "
+        "guard) once deployed",
+    ],
     "10.22": [
         "PROOF runtime fix: Pine evaluates BOTH sides of 'and' and '?:' "
         "\u2014 when price had no zone above or below it, the road map "
@@ -4465,7 +4474,7 @@ def _announce_indicator():
     # indicator #2 — FLOW (15m): more signals, honestly labeled
     n2 = _post_indicator_source(
         "static/xauusd_flow.pine",
-        "\U0001F4E2 INDICATOR \u2116 2 \u00b7 FLOW [15m] \u2014 more signals, "
+        "\U0001F4E2 FLOW15mn \u2014 more signals, "
         "honestly earned\n\n"
         "Same engine, two measured cohorts, both labeled on every "
         "signal:\n"
@@ -4476,7 +4485,7 @@ def _announce_indicator():
         "MAX-FLOW default (swing 2): \u2248 9 A+/month at 62% win + REV "
         "\u2192 \u2248 15 signals/month on 15m. Set the Swing input to 3 for "
         "sniper-grade A+ (80% win). B+ measures 45% and is EXCLUDED.\n"
-        "Use on the 15m chart alongside indicator \u2116 1.\n"
+        "Main chart: 15m.\n"
         "Alerts: 'A+ LONG/SHORT setup' + 'REV LONG/SHORT setup'.")
     time.sleep(1.5)
     # indicator #3 — FRT zone health scout (boxes only, no repaint)
@@ -4501,7 +4510,7 @@ def _announce_indicator():
     # indicator #4 — PROOF: the self-proving zones
     n4 = _post_indicator_source(
         "static/xauusd_proof.pine",
-        "\U0001F9EA INDICATOR \u2116 4 \u00b7 PROOF [Self-Proving Zones] "
+        "\U0001F9EA PROOF \u2014 [Self-Proving Zones] "
         "\u2014 the first indicator that proves itself\n\n"
         "Every zone label carries its own measured track record, computed "
         "live on YOUR chart's own history:\n"
@@ -4547,9 +4556,10 @@ def _announce_indicator():
             _tg_topics().get("indicator"))
         time.sleep(1.5)
         _tg_post_topic(
-            "\u2705 All four indicators posted \u2014 \u2116 4 PROOF is the "
-            "new one: zones that prove themselves. One-click copy: the "
-            "website front page. Red error in the Pine Editor? Message "
+            "\u2705 All four indicator sources posted. The website "
+            "(RENDER INDICATOR) shows FLOW15mn and PROOF with one-click "
+            "copy \u2014 A+ SNIPER and FRT stay here in the topic. Red "
+            "error in the Pine Editor? Message "
             "the group. Not financial advice \u2014 every signal is scored "
             "honestly on the desk.",
             _tg_topics().get("indicator"))

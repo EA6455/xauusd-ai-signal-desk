@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>INDICATOR · XAUUSD</title>
+<title>RENDER INDICATOR</title>
 <style>
   :root{ --bg:#070a10; --card:#101624; --border:#1b2536; --text:#e9edf5;
     --muted:#8b95a8; --gold:#eab54f; --green:#26d36f; --cyan:#22d3ee;
@@ -69,27 +69,12 @@
 </head>
 <body>
 <div class="wrap">
-  <div class="brand">INDICATOR</div>
-  <div class="sub">XAUUSD · one-click copy</div>
-
-  <div class="card">
-    <h1>① <span class="n">A+ SNIPER</span> — strict 8/8</h1>
-    <p>The desk's main engine. Signals <b>only at A+ (8/8 checks)</b> — never B or C.
-       Draws the full trade: entry, SL, TP1/TP2, profit &amp; risk zones. BUY and SELL.</p>
-    <div class="stats">
-      <span class="pill g">A+ 80% win (backtest)</span>
-      <span class="pill y">≈ 6–9 signals/month</span>
-      <span class="pill">15m · 1H · 4H charts</span>
-    </div>
-    <button class="copybtn btn1" id="copyBtn1">📋 COPY A+ SNIPER — 1 CLICK</button>
-    <div class="hint" id="hint1">copies the whole script to your clipboard, ready to paste</div>
-    <div class="meta"><span id="mchars1">…</span><span id="mlines1">…</span></div>
-    <pre class="src" id="src1"><span style="color:var(--muted)">loading source…</span></pre>
-  </div>
+  <div class="brand">RENDER INDICATOR</div>
+  <div class="sub">one-click copy</div>
 
   <div class="card" style="border-color:rgba(20,184,166,.4)">
-    <h1>② <span class="n2">FLOW [15m]</span> — more signals, honestly earned</h1>
-    <p>The desk's second indicator for the 15m chart. Two measured cohorts, every signal labeled:
+    <h1><span class="n2">FLOW15mn</span> — more signals, honestly earned</h1>
+    <p>The desk's 15m signal indicator. Two measured cohorts, every signal labeled:
        <b>A+ (8/8)</b> plus the <b style="color:var(--teal)">REV reversal cohort</b> — fresh BOS-origin
        zone + confirmed retest + live session with neutral structure and 1H trend (the early-reversal
        trades the sniper skips). B+ was measured at 45% and <b>excluded</b>.</p>
@@ -102,34 +87,14 @@
     <p style="margin-top:8px">Ships at <b>swing strength 2 (MAX FLOW)</b> — the most A+ the data supports honestly.
        Prefer sniper-grade A+ only? Change the <b>Swing strength</b> input to <b>3</b> (~6.4/month at 80% win).
        Both settings measured on 70 days of 15m data; every signal still labeled with its cohort.</p>
-    <button class="copybtn btn2" id="copyBtn2">📋 COPY FLOW 15m — 1 CLICK</button>
+    <button class="copybtn btn2" id="copyBtn2">📋 COPY FLOW15mn — 1 CLICK</button>
     <div class="hint" id="hint2">copies the whole script to your clipboard, ready to paste</div>
     <div class="meta"><span id="mchars2">…</span><span id="mlines2">…</span></div>
     <pre class="src" id="src2"><span style="color:var(--muted)">loading source…</span></pre>
   </div>
 
-  <div class="card" style="border-color:rgba(96,165,250,.4)">
-    <h1>③ <span style="color:#60a5fa">FRT</span> — Zone Health Scout · boxes only</h1>
-    <p><b>FRESH · TESTED · WEAK</b> zone boxes and nothing else — no signals, no alerts, no dashboard.
-       Strictly <b>non-repainting</b>: zones are born only from confirmed pivots, box edges are fixed forever,
-       and health changes are evaluated on closed bars only. A broken box is deleted, never redrawn.</p>
-    <div class="stats">
-      <span class="pill" style="border-color:rgba(96,165,250,.5); color:#93c5fd">FRESH solid · TESTED dashed · WEAK gray</span>
-      <span class="pill">no repaint · closed-bar states</span>
-      <span class="pill">read the market, pair with ① ②</span>
-      <span class="pill">16 options</span>
-    </div>
-    <p style="margin-top:8px"><b>Options</b> (Pine settings): show/hide FRESH / TESTED / WEAK individually · demand/supply
-       filters · touch counts — "TESTED (1) / WEAK (3)" · zone age tags · <b>HV</b> high-volume institutional tags ·
-       50% equilibrium midlines · ✕ break markers · adjustable WEAK threshold · max zones &amp; expiry ·
-       extend margin · custom colors · optional zone-<b>state</b> alerts (tested/weak/broken — health events,
-       not trade signals, off by default).</p>
-    <button class="copybtn" id="copyBtn3" style="border:1px solid rgba(96,165,250,.6); background:linear-gradient(92deg, rgba(96,165,250,.16), rgba(34,211,238,.12)); color:#d6e9ff; text-shadow:0 0 14px rgba(96,165,250,.5)">📋 COPY FRT SCOUT — 1 CLICK</button>
-    <div class="hint" id="hint3">copies the whole script to your clipboard, ready to paste</div>
-    <div class="meta"><span id="mchars3">…</span><span id="mlines3">…</span></div>
-    <pre class="src" id="src3"><span style="color:var(--muted)">loading source…</span></pre>
   <div class="card" style="border-color:rgba(167,139,250,.4)">
-    <h1>④ <span style="color:#a78bfa">PROOF</span> — Self-Proving Zones · measured, not promised</h1>
+    <h1><span style="color:#a78bfa">PROOF</span> — Self-Proving Zones · measured, not promised</h1>
     <p><b>The first indicator that proves itself.</b> Every zone label carries its own measured track
        record, computed live on <b>your chart's own history</b>: <b>FRESH · 1st bounce 68% (n=24)</b> ·
        TESTED (1) · next 41% · WEAK (3) · 12% · break map. On load it replays the whole chart, finds
@@ -145,7 +110,7 @@
     <p style="margin-top:8px"><b>Scoreboard</b> (top-right, toggleable): 1st / 2nd / 3rd+ touch bounce rates,
        the same test on raw pivot levels (base rate), and the <b>edge in points</b> — proof the zones beat
        random levels on your timeframe. Options: bounce target (ATR), evaluation window, low-sample
-       threshold, scoreboard position, demand/supply filters, colors, zone caps. Pairs with ① ② ③:
+       threshold, scoreboard position, demand/supply filters, colors, zone caps. Pairs with FLOW15mn:
        run PROOF beside them and see which zones deserve your trust.</p>
     <div style="margin-top:8px; border-top:1px solid var(--border); padding-top:8px">
       <b>Road map — which box is price going to?</b> The scoreboard's last rows show the <b>next zone ↑ and ↓</b>
@@ -159,12 +124,12 @@
         <li><b>Read the scoreboard first.</b> "1st touch" % is your headline number. "Edge vs raw" +10 pts or better = these zones beat random levels on this chart — trade them. Near zero = stand aside or switch timeframe. Everything "low n" = not enough history yet — don't trade the numbers.</li>
         <li><b>Trade only FRESH zones with strong stats.</b> Wait for price to return to the box. Enter at the zone edge (limit order) or on a confirmation candle close at the edge. Stop beyond the far side of the box. Half off at ~0.75R, stop to breakeven, runner to 1.5R.</li>
         <li><b>Downgrade as the numbers downgrade.</b> TESTED (n) shows the NEXT-bounce % — if it reads ~40%, that's a coin flip: smaller size, confirmation candle, TP1 only. WEAK = never buy the bounce — use it as a breakout map (trade the push through it, stop on the far side).</li>
-        <li><b>Vet your signals with it.</b> A+ or REV signal (① ②) printing <i>from</i> a FRESH zone with good stats = the full plan. Signal at a TESTED zone = reversal style, smaller. Nothing at a WEAK zone — skip.</li>
+        <li><b>Vet your signals with it.</b> A+ or REV signal from the desk (Telegram) printing <i>from</i> a FRESH zone with good stats = the full plan. Signal at a TESTED zone = reversal style, smaller. Nothing at a WEAK zone — skip.</li>
       </ol>
       <p style="margin-top:6px"><small>The % is the measured bounce probability on THIS chart — pair it with the desk's exit plan for your R. Numbers grow as history accumulates; re-check the scoreboard weekly. Not financial advice.</small></p>
     </div>
     <div style="margin-top:8px; border-top:1px solid var(--border); padding-top:8px">
-      <b>Best timeframes</b> — <b>15m main</b> (the whole stack is measured on 15m, and ①② signal on 15m
+      <b>Best timeframes</b> — <b>15m main</b> (the whole stack is measured on 15m, and FLOW15mn signals on 15m
       so vetting works on one chart) · <b>1H</b> cleaner-but-slower alternative · <b>4H</b> structure/bias
       (zones live for weeks, stats mature slowly) · <b>avoid 1–5m</b> — noise and dead-session wicks wreck zones.
       The honest answer is in the scoreboard: compare the <b>edge</b> row across timeframes — the TF with the
@@ -212,11 +177,7 @@
       hint.textContent = 'auto-copy blocked here — the code is selected, press Ctrl+C / long-press → Copy';
     });
   }
-  wire('copyBtn1', 'hint1', 'src1', 'mchars1', 'mlines1', '/pine',
-       '✅ COPIED — NOW PASTE IT IN THE PINE EDITOR');
   wire('copyBtn2', 'hint2', 'src2', 'mchars2', 'mlines2', '/pine2',
-       '✅ COPIED — NOW PASTE IT IN THE PINE EDITOR');
-  wire('copyBtn3', 'hint3', 'src3', 'mchars3', 'mlines3', '/pine3',
        '✅ COPIED — NOW PASTE IT IN THE PINE EDITOR');
   wire('copyBtn4', 'hint4', 'src4', 'mchars4', 'mlines4', '/pine4',
        '✅ COPIED — NOW PASTE IT IN THE PINE EDITOR');

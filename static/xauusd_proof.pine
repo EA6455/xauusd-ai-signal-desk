@@ -30,7 +30,7 @@
 //  No trade signals. No alerts. It upgrades indicators 1-3: run it
 //  beside them and see which zones deserve your trust.
 // ============================================================================
-indicator("XAUUSD PROOF [Self-Proving Zones]", overlay = true,
+indicator("PROOF", overlay = true,
      max_boxes_count = 500, max_labels_count = 50, max_lines_count = 50)
 
 // ---- inputs: detection ------------------------------------------------------

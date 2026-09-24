@@ -419,11 +419,20 @@ if barstate.islast
     bool nsUp = false
     int nsZi = -1
     float nsLvl = na
-    if upZi >= 0 and array.get(zTouches, upZi) == 0
+    // NOTE: Pine evaluates BOTH sides of 'and' and '?:' — array reads
+    // must be precomputed inside index guards, never inline (that was
+    // the 'Index -1' crash when no zone existed above/below price)
+    bool upFresh = false
+    if upZi >= 0
+        upFresh := array.get(zTouches, upZi) == 0
+    bool dnFresh = false
+    if dnZi >= 0
+        dnFresh := array.get(zTouches, dnZi) == 0
+    if upFresh
         nsUp := true
         nsLvl := upLvl
         nsZi := upZi
-    else if dnZi >= 0 and array.get(zTouches, dnZi) == 0
+    else if dnFresh
         nsLvl := dnLvl
         nsZi := dnZi
     else if upZi >= 0 and dnZi >= 0
@@ -509,16 +518,38 @@ if barstate.islast
         table.cell(tb, 1, 6, str.tostring(evalWindow) + " bars", text_color = color.new(color.gray, 35), text_size = size.tiny)
         table.cell(tb, 2, 6, "closed bars · excl " + str.tostring(exclN), text_color = color.new(color.gray, 35), text_size = size.tiny)
         if showRoadmapRows
-            distU = upZi < 0 or na(atr) ? "" : " · " + str.tostring((upLvl - close) / atr, "#.#") + " ATR"
-            distD = dnZi < 0 or na(atr) ? "" : " · " + str.tostring((close - dnLvl) / atr, "#.#") + " ATR"
+            string distU = ""
+            string distD = ""
+            if upZi >= 0 and not na(atr)
+                distU := " · " + str.tostring((upLvl - close) / atr, "#.#") + " ATR"
+            if dnZi >= 0 and not na(atr)
+                distD := " · " + str.tostring((close - dnLvl) / atr, "#.#") + " ATR"
+            string upLvlTxt = "none"
+            string upInfTxt = ""
+            if upZi >= 0
+                upLvlTxt := str.tostring(upLvl, format.mintick)
+                upInfTxt := f_zoneLabel(upZi) + distU
+            string dnLvlTxt = "none"
+            string dnInfTxt = ""
+            if dnZi >= 0
+                dnLvlTxt := str.tostring(dnLvl, format.mintick)
+                dnInfTxt := f_zoneLabel(dnZi) + distD
+            string stopTxt = "—"
+            string stopWhy = ""
+            if nsZi >= 0
+                stopTxt := (nsUp ? "↑ " : "↓ ") + str.tostring(nsLvl, format.mintick)
+                string stopKind = "nearest zone"
+                if array.get(zTouches, nsZi) == 0
+                    stopKind := "fresh magnet"
+                stopWhy := stopKind
+                if not na(atr)
+                    stopWhy := stopKind + " · " + str.tostring(math.abs(nsLvl - close) / atr, "#.#") + " ATR"
             table.cell(tb, 0, 7, "road ↑", text_color = color.new(color.red, 15), text_size = size.tiny)
-            table.cell(tb, 1, 7, upZi >= 0 ? str.tostring(upLvl, format.mintick) : "none", text_color = color.new(color.white, 20), text_size = size.tiny)
-            table.cell(tb, 2, 7, upZi >= 0 ? f_zoneLabel(upZi) + distU : "", text_color = color.new(color.gray, 25), text_size = size.tiny)
+            table.cell(tb, 1, 7, upLvlTxt, text_color = color.new(color.white, 20), text_size = size.tiny)
+            table.cell(tb, 2, 7, upInfTxt, text_color = color.new(color.gray, 25), text_size = size.tiny)
             table.cell(tb, 0, 8, "road ↓", text_color = color.new(color.green, 15), text_size = size.tiny)
-            table.cell(tb, 1, 8, dnZi >= 0 ? str.tostring(dnLvl, format.mintick) : "none", text_color = color.new(color.white, 20), text_size = size.tiny)
-            table.cell(tb, 2, 8, dnZi >= 0 ? f_zoneLabel(dnZi) + distD : "", text_color = color.new(color.gray, 25), text_size = size.tiny)
-            stopTxt = nsZi < 0 ? "—" : (nsUp ? "↑ " : "↓ ") + str.tostring(nsLvl, format.mintick)
-            stopWhy = nsZi < 0 ? "" : (array.get(zTouches, nsZi) == 0 ? "fresh magnet" : "nearest zone") + (na(atr) ? "" : " · " + str.tostring(math.abs(nsLvl - close) / atr, "#.#") + " ATR")
+            table.cell(tb, 1, 8, dnLvlTxt, text_color = color.new(color.white, 20), text_size = size.tiny)
+            table.cell(tb, 2, 8, dnInfTxt, text_color = color.new(color.gray, 25), text_size = size.tiny)
             table.cell(tb, 0, 9, "NEXT STOP", text_color = color.new(color.white, 8), text_size = size.tiny, bgcolor = hdr)
             table.cell(tb, 1, 9, stopTxt, text_color = color.new(color.white, 8), text_size = size.tiny, bgcolor = hdr)
             table.cell(tb, 2, 9, stopWhy, text_color = color.new(color.white, 20), text_size = size.tiny, bgcolor = hdr)

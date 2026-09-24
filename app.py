@@ -78,8 +78,16 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "10.21"
+SYSTEM_VERSION = "10.22"
 SYSTEM_CHANGELOG = {
+    "10.22": [
+        "PROOF runtime fix: Pine evaluates BOTH sides of 'and' and '?:' "
+        "\u2014 when price had no zone above or below it, the road map "
+        "still read the zone array at index -1 and crashed ('Index -1 "
+        "is out of bounds'). All road-map reads are now precomputed "
+        "inside index guards; full guard audit added. Members: re-copy "
+        "PROOF v4 from the website or the topic",
+    ],
     "10.21": [
         "PROOF road map: the scoreboard now shows the next zone up and "
         "down with live stats and ATR distance, a NEXT STOP row (the "

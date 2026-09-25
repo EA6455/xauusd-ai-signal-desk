@@ -1,6 +1,6 @@
-//@version=5
+//@version=6
 // ============================================================================
-//  GHOST  ·  FOLLOW THE FLOW  —  the desk's SEVENTH indicator
+//  GHOST  ·  FOLLOW THE FLOW  —  the desk's SEVENTH indicator (Pine v6)
 //
 //  Buy/sell that trades WITH the big flow, plus the ghosts that show it:
 //
@@ -115,6 +115,7 @@ newG = ta.change(time(ghostTf)) != 0
 var int gStart = na
 var gBodies = array.new_box(0)
 var gWicks = array.new_line(0)
+var pHeights = array.new_float(0)
 var box liveBody = na
 var line liveWick = na
 
@@ -163,7 +164,6 @@ if not showLive
     liveWick := line(na)
 
 // small prediction candle: where the forming ghost points if the swing continues
-var pHeights = array.new_float(0)
 var box predBody = na
 if showPredict and not na(vO) and not na(vC) and not na(atr)
     pUp = vC >= vO

@@ -78,8 +78,15 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "10.35"
+SYSTEM_VERSION = "10.36"
 SYSTEM_CHANGELOG = {
+    "10.36": [
+        "GHOST v6 hotfix: the pHeights array was declared after its "
+        "first use in the ghost engine \u2014 Pine compile error "
+        "\u201cUndeclared identifier\u201d. Declaration moved above the "
+        "engine, and the script is upgraded to Pine v6 (removes the "
+        "outdated-version warning). Members: re-copy GHOST",
+    ],
     "10.35": [
         "GHOST v6 \u2014 ladder setups + data-driven prediction candle: "
         "setups now draw as a clean TP / BUY / SL ladder of labeled "

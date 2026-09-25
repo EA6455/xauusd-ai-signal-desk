@@ -1,0 +1,275 @@
+//@version=5
+// ============================================================================
+//  GHOST  ·  FOLLOW THE FLOW  —  the desk's SEVENTH indicator
+//
+//  Buy/sell that trades WITH the big flow, plus the ghosts that show it:
+//
+//  · GHOST CANDLES — the higher timeframe's candles (default 1H) drawn
+//    translucently BEHIND your chart: soft teal bodies for up candles,
+//    soft rose for down, wick at the center. The forming candle glows
+//    slightly brighter so you always see the flow you are trading.
+//    Completed ghosts never repaint; the live ghost updates in real time.
+//
+//  · FLOW SIGNALS — longs ONLY when 1H and 4H trends agree UP, shorts
+//    ONLY when both agree DOWN (confirmed HTF bars, no lookahead).
+//    Entry = momentum resumption after a pullback: price dips to the
+//    slow EMA, then closes back through the fast EMA in the flow's
+//    direction. Every signal draws the full trade: entry, SL beyond
+//    the recent swing, TP1 0.75R / TP2 1.5R + profit/risk zones.
+//    Alerts: FLOW LONG / FLOW SHORT / FLOW turned UP / DOWN.
+//
+//  HONESTY: this is a NEW trend-following engine. The desk's measured
+//  stats (A+ 80%, REV 92%) are for the zone engine — not this one.
+//  No winrate is claimed here. Trade it small first.
+//
+//  No repaint: signals and ghosts evaluate on CLOSED bars only; HTF
+//  data comes from confirmed bars only. The live ghost is live state,
+//  not history.
+// ============================================================================
+indicator("GHOST", overlay = true,
+     max_boxes_count = 500, max_labels_count = 100, max_lines_count = 300)
+
+// ---- inputs: ghost candles -----------------------------------------------------
+grpG = "Ghost candles (the big flow, made visible)"
+htfTf     = input.timeframe("60", "Ghost timeframe (drawn behind your chart)", group = grpG)
+showLive  = input.bool(true, "Show the forming candle (slightly brighter)", group = grpG)
+maxGhosts = input.int(80, "Max ghost candles on chart", minval = 20, maxval = 200, group = grpG)
+ghostUp   = input.color(#14b8a6, "Ghost up color",  group = grpG)
+ghostDn   = input.color(#f43f5e, "Ghost down color", group = grpG)
+
+// ---- inputs: flow signals ---------------------------------------------------------
+grpF = "Flow signals (buy / sell)"
+showSignals = input.bool(true, "Show flow signals — longs with 1H+4H up, shorts with both down", group = grpF)
+fastLen = input.int(9,  "Fast EMA",  minval = 3, maxval = 50, group = grpF)
+slowLen = input.int(21, "Slow EMA",  minval = 5, maxval = 200, group = grpF)
+pbBars  = input.int(6,  "Pullback window (bars price must dip toward the slow EMA)", minval = 2, maxval = 20, group = grpF)
+slBars  = input.int(10, "Stop anchor: swing lookback (bars)", minval = 3, maxval = 40, group = grpF)
+slBuf   = input.float(0.15, "Stop buffer beyond swing (ATR)", minval = 0.0, step = 0.05, group = grpF)
+tp1R    = input.float(0.75, "TP1 (R) — half off", minval = 0.1, step = 0.05, group = grpF)
+tp2R    = input.float(1.5,  "TP2 (R) — runner",   minval = 0.2, step = 0.05, group = grpF)
+
+// ---- inputs: display ----------------------------------------------------------------
+grpV = "Display"
+showPanel = input.bool(true, "Show panel", group = grpV)
+posOpt = input.string("Top Right", "Panel position",
+     options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group = grpV)
+showSess = input.bool(true, "Shade dead session (21:00-01:00 UTC)", group = grpV)
+
+// ---- basics -----------------------------------------------------------------------------
+atr = ta.atr(14)
+hrU = hour(time, "UTC")
+sessDead = hrU >= 21 or hrU < 1
+bgcolor(showSess and sessDead ? color.new(color.gray, 94) : na)
+
+emaF = ta.ema(close, fastLen)
+emaS = ta.ema(close, slowLen)
+
+// 1H and 4H trend from COMPLETED higher-timeframe bars (non-repainting)
+[hE9, hE21, hC] = request.security(syminfo.tickerid, "60",
+     [ta.ema(close, 9)[1], ta.ema(close, 21)[1], close[1]],
+     lookahead = barmerge.lookahead_on)
+[fE9, fE21, fC] = request.security(syminfo.tickerid, "240",
+     [ta.ema(close, 9)[1], ta.ema(close, 21)[1], close[1]],
+     lookahead = barmerge.lookahead_on)
+t1 = na(hE9) or na(hE21) ? 0 : hE9 > hE21 and hC > hE21 ? 1 : hE9 < hE21 and hC < hE21 ? -1 : 0
+t4 = na(fE9) or na(fE21) ? 0 : fE9 > fE21 and fC > fE21 ? 1 : fE9 < fE21 and fC < fE21 ? -1 : 0
+flowUp = t1 == 1 and t4 == 1
+flowDn = t1 == -1 and t4 == -1
+
+// ---- ghost candle data: completed [1] + live forming --------------------------------------
+[gO, gH, gL, gC] = request.security(syminfo.tickerid, htfTf,
+     [open[1], high[1], low[1], close[1]],
+     lookahead = barmerge.lookahead_on)
+[vO, vH, vL, vC] = request.security(syminfo.tickerid, htfTf,
+     [open, high, low, close],
+     lookahead = barmerge.lookahead_on)
+newG = ta.change(time(htfTf)) != 0
+
+var int gStart = na
+var gBodies = array.new_box(0)
+var gWicks = array.new_line(0)
+var box liveBody = na
+var line liveWick = na
+
+f_ghostCenter(x1, x2) =>
+    int(math.round((x1 + x2) / 2.0))
+
+// ---- finalize completed ghosts + move the live ghost (every bar) ---------------------------
+if newG and not na(gStart) and bar_index > gStart and not na(gO)
+    upG = gC >= gO
+    gc = upG ? ghostUp : ghostDn
+    bTop = math.max(gO, gC)
+    bBot = math.min(gO, gC)
+    array.push(gBodies, box.new(gStart, bTop, bar_index - 1, bBot, bgcolor = color.new(gc, 88), border_color = color.new(gc, 68), border_width = 1))
+    array.push(gWicks, line.new(f_ghostCenter(gStart, bar_index - 1), gH, f_ghostCenter(gStart, bar_index - 1), gL, color = color.new(gc, 60), width = 1))
+    if array.size(gBodies) > maxGhosts
+        box.delete(array.get(gBodies, 0))
+        line.delete(array.get(gWicks, 0))
+        array.remove(gBodies, 0)
+        array.remove(gWicks, 0)
+if newG
+    gStart := bar_index
+if showLive and not na(gStart) and not na(vO)
+    upL = vC >= vO
+    lc = upL ? ghostUp : ghostDn
+    lTop = math.max(vO, vC)
+    lBot = math.min(vO, vC)
+    cx = f_ghostCenter(gStart, bar_index + 1)
+    if na(liveBody)
+        liveBody := box.new(gStart, lTop, bar_index + 1, lBot, bgcolor = color.new(lc, 82), border_color = color.new(lc, 55), border_width = 1)
+        liveWick := line.new(cx, vH, cx, vL, color = color.new(lc, 45), width = 1)
+    else
+        box.set_lefttop(liveBody, gStart, lTop)
+        box.set_rightbottom(liveBody, bar_index + 1, lBot)
+        box.set_bgcolor(liveBody, color.new(lc, 82))
+        box.set_border_color(liveBody, color.new(lc, 55))
+        line.set_xy1(liveWick, cx, vH)
+        line.set_xy2(liveWick, cx, vL)
+        line.set_color(liveWick, color.new(lc, 45))
+if not showLive
+    box.delete(liveBody)
+    line.delete(liveWick)
+    liveBody := box(na)
+    liveWick := line(na)
+
+// ---- flow signal engine — CLOSED BARS ONLY (strict no-repaint) ------------------------------
+var tEntry = array.new_line(0)
+var tSL = array.new_line(0)
+var tTP1 = array.new_line(0)
+var tTP2 = array.new_line(0)
+var tPBox = array.new_box(0)
+var tRBox = array.new_box(0)
+var sigLbls = array.new_label(0)
+var int sigN = 0
+var bool wasUp = false
+var bool wasDn = false
+bool sigLong = false
+bool sigShort = false
+bool flipUp = false
+bool flipDn = false
+
+pullLo = ta.lowest(low, pbBars)
+pullHi = ta.highest(high, pbBars)
+crossFUp = ta.crossover(close, emaF)
+crossFDn = ta.crossunder(close, emaF)
+
+if barstate.isconfirmed
+    // flow flips (for alerts + panel)
+    flipUp := flowUp and not wasUp
+    flipDn := flowDn and not wasDn
+    wasUp := flowUp
+    wasDn := flowDn
+    // LONG: big flow up + pullback touched the slow EMA zone + momentum resumption
+    if showSignals and flowUp and pullLo < emaS and crossFUp and close > emaS and close > open and not sessDead
+        sigLong := true
+        sigN += 1
+        entryP = close
+        slP = ta.lowest(low, slBars) - slBuf * atr
+        riskP = entryP - slP
+        if riskP < 0.2 * atr
+            riskP := 0.2 * atr
+            slP := entryP - riskP
+        tp1P = entryP + tp1R * riskP
+        tp2P = entryP + tp2R * riskP
+        if array.size(tEntry) >= 12
+            line.delete(array.get(tEntry, 0))
+            line.delete(array.get(tSL, 0))
+            line.delete(array.get(tTP1, 0))
+            line.delete(array.get(tTP2, 0))
+            box.delete(array.get(tPBox, 0))
+            box.delete(array.get(tRBox, 0))
+            array.remove(tEntry, 0)
+            array.remove(tSL, 0)
+            array.remove(tTP1, 0)
+            array.remove(tTP2, 0)
+            array.remove(tPBox, 0)
+            array.remove(tRBox, 0)
+        ext = bar_index + 34
+        array.push(tEntry, line.new(bar_index, entryP, ext, entryP, color = color.new(color.blue, 0), width = 2))
+        array.push(tSL, line.new(bar_index, slP, ext, slP, color = color.new(color.red, 0), width = 2, style = line.style_dashed))
+        array.push(tTP1, line.new(bar_index, tp1P, ext, tp1P, color = color.new(color.green, 35), width = 1))
+        array.push(tTP2, line.new(bar_index, tp2P, ext, tp2P, color = color.new(color.green, 0), width = 2))
+        array.push(tPBox, box.new(bar_index, math.max(entryP, tp2P), ext, math.min(entryP, tp2P), bgcolor = color.new(color.green, 84), border_color = color.new(color.green, 45)))
+        array.push(tRBox, box.new(bar_index, math.max(entryP, slP), ext, math.min(entryP, slP), bgcolor = color.new(color.red, 82), border_color = color.new(color.red, 50)))
+        array.push(sigLbls, label.new(bar_index, low, "▲ LONG · FLOW\nE " + str.tostring(entryP, "#.##") + "\nSL " + str.tostring(slP, "#.##") + "\nTP1 " + str.tostring(tp1P, "#.##") + "\nTP2 " + str.tostring(tp2P, "#.##"), style = label.style_label_up, color = color.new(ghostUp, 10), textcolor = color.white, size = size.small))
+        if array.size(sigLbls) > 40
+            label.delete(array.get(sigLbls, 0))
+            array.remove(sigLbls, 0)
+    // SHORT: big flow down + pullback touched the slow EMA zone + momentum resumption down
+    if showSignals and flowDn and pullHi > emaS and crossFDn and close < emaS and close < open and not sessDead
+        sigShort := true
+        sigN += 1
+        entryP = close
+        slP = ta.highest(high, slBars) + slBuf * atr
+        riskP = slP - entryP
+        if riskP < 0.2 * atr
+            riskP := 0.2 * atr
+            slP := entryP + riskP
+        tp1P = entryP - tp1R * riskP
+        tp2P = entryP - tp2R * riskP
+        if array.size(tEntry) >= 12
+            line.delete(array.get(tEntry, 0))
+            line.delete(array.get(tSL, 0))
+            line.delete(array.get(tTP1, 0))
+            line.delete(array.get(tTP2, 0))
+            box.delete(array.get(tPBox, 0))
+            box.delete(array.get(tRBox, 0))
+            array.remove(tEntry, 0)
+            array.remove(tSL, 0)
+            array.remove(tTP1, 0)
+            array.remove(tTP2, 0)
+            array.remove(tPBox, 0)
+            array.remove(tRBox, 0)
+        ext = bar_index + 34
+        array.push(tEntry, line.new(bar_index, entryP, ext, entryP, color = color.new(color.blue, 0), width = 2))
+        array.push(tSL, line.new(bar_index, slP, ext, slP, color = color.new(color.red, 0), width = 2, style = line.style_dashed))
+        array.push(tTP1, line.new(bar_index, tp1P, ext, tp1P, color = color.new(color.green, 35), width = 1))
+        array.push(tTP2, line.new(bar_index, tp2P, ext, tp2P, color = color.new(color.green, 0), width = 2))
+        array.push(tPBox, box.new(bar_index, math.max(entryP, tp2P), ext, math.min(entryP, tp2P), bgcolor = color.new(color.green, 84), border_color = color.new(color.green, 45)))
+        array.push(tRBox, box.new(bar_index, math.max(entryP, slP), ext, math.min(entryP, slP), bgcolor = color.new(color.red, 82), border_color = color.new(color.red, 50)))
+        array.push(sigLbls, label.new(bar_index, high, "▼ SHORT · FLOW\nE " + str.tostring(entryP, "#.##") + "\nSL " + str.tostring(slP, "#.##") + "\nTP1 " + str.tostring(tp1P, "#.##") + "\nTP2 " + str.tostring(tp2P, "#.##"), style = label.style_label_down, color = color.new(ghostDn, 10), textcolor = color.white, size = size.small))
+        if array.size(sigLbls) > 40
+            label.delete(array.get(sigLbls, 0))
+            array.remove(sigLbls, 0)
+
+// ---- plots + alerts ------------------------------------------------------------------------------
+plotshape(sigLong,  style = shape.triangleup,   location = location.belowbar, color = color.new(#14b8a6, 0), size = size.small, title = "FLOW LONG")
+plotshape(sigShort, style = shape.triangledown, location = location.abovebar, color = color.new(#f43f5e, 0), size = size.small, title = "FLOW SHORT")
+plotshape(flipUp,   style = shape.diamond,      location = location.belowbar, color = color.new(#22d3ee, 0), size = size.tiny,  title = "FLOW turned UP")
+plotshape(flipDn,   style = shape.diamond,      location = location.abovebar, color = color.new(#22d3ee, 0), size = size.tiny,  title = "FLOW turned DOWN")
+
+alertcondition(sigLong,  "FLOW LONG setup",  "GHOST: FLOW LONG — 1H+4H up, pullback resumption confirmed. Entry, SL and TPs drawn on chart")
+alertcondition(sigShort, "FLOW SHORT setup", "GHOST: FLOW SHORT — 1H+4H down, pullback resumption confirmed. Entry, SL and TPs drawn on chart")
+alertcondition(flipUp,   "FLOW turned UP",   "GHOST: the big flow just turned UP — 1H and 4H now agree bullish")
+alertcondition(flipDn,   "FLOW turned DOWN", "GHOST: the big flow just turned DOWN — 1H and 4H now agree bearish")
+
+// ---- panel — last bar only (overwrite-only, no merges/clears) ---------------------------------------
+f_dirTxt(v) =>
+    v == 1 ? "▲" : v == -1 ? "▼" : "—"
+
+var table tb = na
+if showPanel and barstate.islast
+    if na(tb)
+        posMap = posOpt == "Top Right" ? position.top_right : posOpt == "Top Left" ? position.top_left : posOpt == "Bottom Right" ? position.bottom_right : position.bottom_left
+        tb := table.new(posMap, 3, 6, bgcolor = color.new(#0a0e17, 15), border_width = 1, border_color = color.new(color.gray, 72))
+    hdr = color.new(color.gray, 62)
+    table.cell(tb, 0, 0, "GHOST", text_color = color.new(color.white, 8), text_size = size.small, bgcolor = hdr)
+    table.cell(tb, 1, 0, "follow the flow", text_color = color.new(color.white, 8), text_size = size.small, bgcolor = hdr)
+    table.cell(tb, 2, 0, "ghost candles", text_color = color.new(color.white, 8), text_size = size.small, bgcolor = hdr)
+    flowTxt = flowUp ? "▲ UP" : flowDn ? "▼ DOWN" : "— NEUTRAL"
+    flowCol = flowUp ? color.new(color.green, 10) : flowDn ? color.new(color.red, 10) : color.new(color.gray, 10)
+    table.cell(tb, 0, 1, "big flow", text_color = color.new(color.white, 25), text_size = size.tiny)
+    table.cell(tb, 1, 1, flowTxt, text_color = flowCol, text_size = size.tiny)
+    table.cell(tb, 2, 1, "1H " + f_dirTxt(t1) + " · 4H " + f_dirTxt(t4), text_color = color.new(color.gray, 25), text_size = size.tiny)
+    table.cell(tb, 0, 2, "ghosts", text_color = color.new(color.white, 25), text_size = size.tiny)
+    table.cell(tb, 1, 2, str.tostring(array.size(gBodies) + (showLive and not na(liveBody) ? 1 : 0)), text_color = color.new(color.white, 20), text_size = size.tiny)
+    table.cell(tb, 2, 2, htfTf + (showLive ? " · live on" : ""), text_color = color.new(color.gray, 30), text_size = size.tiny)
+    table.cell(tb, 0, 3, "signals fired", text_color = color.new(color.white, 25), text_size = size.tiny)
+    table.cell(tb, 1, 3, str.tostring(sigN), text_color = color.new(color.white, 20), text_size = size.tiny)
+    table.cell(tb, 2, 3, "longs " + (flowUp ? "only" : "blocked") + " · shorts " + (flowDn ? "only" : "blocked"), text_color = color.new(color.gray, 30), text_size = size.tiny)
+    table.cell(tb, 0, 4, "session", text_color = color.new(color.white, 25), text_size = size.tiny)
+    table.cell(tb, 1, 4, sessDead ? "dead 21-01" : "live", text_color = sessDead ? color.new(color.red, 10) : color.new(color.green, 10), text_size = size.tiny)
+    table.cell(tb, 2, 4, "signals need live session", text_color = color.new(color.gray, 30), text_size = size.tiny)
+    table.cell(tb, 0, 5, "new engine · not yet desk-measured", text_color = color.new(color.gray, 45), text_size = size.tiny)
+    table.cell(tb, 1, 5, "closed bars · no repaint", text_color = color.new(color.gray, 45), text_size = size.tiny)
+    table.cell(tb, 2, 5, "trade small first", text_color = color.new(color.gray, 45), text_size = size.tiny)

@@ -78,8 +78,22 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "10.29"
+SYSTEM_VERSION = "10.30"
 SYSTEM_CHANGELOG = {
+    "10.30": [
+        "SEVENTH TradingView indicator: GHOST \u2014 buy/sell that follows "
+        "the big flow. Longs only when 1H and 4H trends agree up, "
+        "shorts only when both down (confirmed HTF bars); entries on "
+        "momentum resumption after a pullback, full trade drawn "
+        "(entry, SL, TP1 0.75R, TP2 1.5R) plus four alerts including "
+        "flow-flip diamonds. The signature feature: GHOST CANDLES "
+        "\u2014 the higher timeframe's candles drawn translucently behind "
+        "the chart (soft teal up / rose down, live candle brighter) so "
+        "members always see the flow they trade. Honest label: new "
+        "trend engine, not yet desk-measured \u2014 no winrate claimed. "
+        "Served at /pine7 with a fifth website card; all seven "
+        "indicator sources reposted to the INDICATOR topic",
+    ],
     "10.29": [
         "RENDER TradingView indicator now tells buy/sell: a sixth "
         "module, SIGNALS, ports the FLOW15mn engine inside \u2014 A+ "
@@ -4636,7 +4650,33 @@ def _announce_indicator():
         "only, timeouts excluded, low n flagged, no repaint. Measured, "
         "not promised.\n"
         "One-click copy: the website front page \u2014 RENDER card.")
-    total = n1 + n2 + n3 + n4 + n5 + n6
+    time.sleep(1.5)
+    # indicator #7 — GHOST: follow the flow + ghost candles
+    n7 = _post_indicator_source(
+        "static/xauusd_ghost.pine",
+        "\U0001F47B GHOST \u2014 FOLLOW THE FLOW\n\n"
+        "Buy/sell that trades WITH the big flow, plus the ghosts that "
+        "show it:\n"
+        "\u2022 GHOST CANDLES \u2014 the higher timeframe's candles "
+        "(default 1H) drawn translucently BEHIND your chart: soft teal "
+        "for up, soft rose for down, the forming candle slightly "
+        "brighter. You always see the flow you are trading.\n"
+        "\u2022 FLOW SIGNALS \u2014 longs ONLY when 1H and 4H trends "
+        "agree UP, shorts ONLY when both agree DOWN (confirmed HTF "
+        "bars, no lookahead). Entry = momentum resumption after a "
+        "pullback: price dips toward the slow EMA, then closes back "
+        "through the fast EMA in the flow's direction. Every signal "
+        "draws entry, SL beyond the recent swing, TP1 0.75R / TP2 "
+        "1.5R.\n"
+        "Alerts: FLOW LONG / FLOW SHORT / FLOW turned UP / DOWN (the "
+        "\u25c6 diamonds mark flips).\n\n"
+        "HONESTY: this is a NEW trend-following engine \u2014 the desk's "
+        "measured stats (A+ 80%, REV 92%) are for the zone engine, not "
+        "this one. No winrate claimed. Trade it small first.\n"
+        "No repaint: signals and ghosts on closed bars only; HTF data "
+        "from confirmed bars only.\n"
+        "One-click copy: the website front page.")
+    total = n1 + n2 + n3 + n4 + n5 + n6 + n7
     if total:
         _tg_post_topic(
             "\U0001F4E6 HOW TO TRADE THE ZONE BOXES (FLOW indicator)\n\n"
@@ -4661,10 +4701,10 @@ def _announce_indicator():
             _tg_topics().get("indicator"))
         time.sleep(1.5)
         _tg_post_topic(
-            "\u2705 All six indicator sources posted \u2014 RENDER is "
-            "the new flagship: PROOF + CLOCK + SIZE + GAUGE + CONSENSUS "
-            "in ONE indicator. One-click copy: the website front page "
-            "\u2014 RENDER card first. Red error in the Pine Editor? Message "
+            "\u2705 All seven indicator sources posted \u2014 GHOST is "
+            "the new one: buy/sell that follows the big flow + ghost "
+            "candles. One-click copy: the website front page. Red error "
+            "in the Pine Editor? Message "
             "the group. Not financial advice \u2014 every signal is scored "
             "honestly on the desk.",
             _tg_topics().get("indicator"))
@@ -4672,7 +4712,7 @@ def _announce_indicator():
         STATE["lastIndicatorPost"] = dict(t=int(time.time()),
                                           parts=total, sent=total)
         _save_state()
-    print(f"[desk] posted all 6 indicators to INDICATOR topic "
+    print(f"[desk] posted all 7 indicators to INDICATOR topic "
           f"({total} parts)", flush=True)
     return total
 
@@ -5820,6 +5860,19 @@ def pine_render():
     try:
         with open(os.path.join(app.root_path, "static",
                                "xauusd_render.pine")) as f:
+            txt = f.read()
+        return Response(txt, mimetype="text/plain")
+    except Exception:  # noqa: BLE001
+        return Response("-- indicator file missing --", mimetype="text/plain")
+
+
+@app.route("/pine7")
+def pine_ghost():
+    """Indicator #7 — GHOST: buy/sell that follows the big flow, with
+    ghost candles of the higher timeframe drawn behind the chart."""
+    try:
+        with open(os.path.join(app.root_path, "static",
+                               "xauusd_ghost.pine")) as f:
             txt = f.read()
         return Response(txt, mimetype="text/plain")
     except Exception:  # noqa: BLE001

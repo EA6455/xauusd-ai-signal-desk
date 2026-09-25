@@ -210,6 +210,30 @@
     <div class="meta"><span id="mchars5">…</span><span id="mlines5">…</span></div>
     <pre class="src" id="src5"><span style="color:var(--muted)">loading source…</span></pre>
   </div>
+  <div class="card" style="border-color:rgba(20,184,166,.45)">
+    <h1><span style="color:#14b8a6">GHOST</span> — Follow the Flow · buy/sell with the big trend + ghost candles</h1>
+    <p><b>Buy/sell that trades WITH the big flow, plus the ghosts that show it.</b></p>
+    <p style="margin-top:6px"><b style="color:#14b8a6">· GHOST CANDLES</b> — the higher timeframe's candles (default 1H, any TF in settings) drawn
+       translucently <b>behind your chart</b>: soft teal bodies for up candles, soft rose for down, wick at the center, the forming candle
+       slightly brighter. You always see the flow you are trading.</p>
+    <p style="margin-top:6px"><b style="color:#f43f5e">· FLOW SIGNALS</b> — longs <b>only</b> when 1H and 4H trends agree UP, shorts <b>only</b> when both
+       agree DOWN (confirmed HTF bars, no lookahead). Entry = momentum resumption after a pullback: price dips toward the slow EMA, then closes
+       back through the fast EMA in the flow's direction. Every signal draws the full trade — entry, SL beyond the recent swing,
+       <b>TP1 0.75R / TP2 1.5R</b> + profit/risk zones. Alerts: FLOW LONG / FLOW SHORT / FLOW turned UP / DOWN (◆ diamonds mark the flips).</p>
+    <div class="stats">
+      <span class="pill" style="border-color:rgba(20,184,166,.5); color:#5eead4">ghost candles: see the flow you trade</span>
+      <span class="pill">1H + 4H must agree · pullback entries</span>
+      <span class="pill">no repaint · closed bars only</span>
+    </div>
+    <p style="margin-top:8px"><b>Honest note:</b> this is a NEW trend-following engine — the desk's measured stats (A+ 80%, REV 92%) are for the
+       zone engine, not this one. No winrate is claimed here. Trade it small first. Pairs beautifully with RENDER: RENDER's zones and stats for
+       <i>where</i>, GHOST's candles and signals for <i>with the flow</i>.</p>
+    <button class="copybtn" id="copyBtn7" style="border:1px solid rgba(20,184,166,.65); background:linear-gradient(92deg, rgba(20,184,166,.16), rgba(244,63,94,.10)); color:#ccfbf1; text-shadow:0 0 14px rgba(20,184,166,.5)">📋 COPY GHOST — 1 CLICK</button>
+    <div class="hint" id="hint7">copies the whole script to your clipboard, ready to paste</div>
+    <div class="meta"><span id="mchars7">…</span><span id="mlines7">…</span></div>
+    <pre class="src" id="src7"><span style="color:var(--muted)">loading source…</span></pre>
+  </div>
+
   </div>
 </div>
 
@@ -255,6 +279,8 @@
   wire('copyBtn4', 'hint4', 'src4', 'mchars4', 'mlines4', '/pine4',
        '✅ COPIED — NOW PASTE IT IN THE PINE EDITOR');
   wire('copyBtn5', 'hint5', 'src5', 'mchars5', 'mlines5', '/pine5',
+       '✅ COPIED — NOW PASTE IT IN THE PINE EDITOR');
+  wire('copyBtn7', 'hint7', 'src7', 'mchars7', 'mlines7', '/pine7',
        '✅ COPIED — NOW PASTE IT IN THE PINE EDITOR');
 })();
 </script>

@@ -21,14 +21,17 @@
 //    (Optional stricter mode in settings requires the fast EMA too.)
 //    SL is anchored TIGHT at the pullback extreme (not a wide swing
 //    lookback), so TP1 0.75R / TP2 1.5R sit closer and are reachable.
-//    SETUPS: when a signal appears, a TRENDLINE is drawn from the
-//    pullback extreme through the entry (extended right) with a
-//    compact BUY/SELL label carrying E, SL, TP1, TP2.
+//    SETUPS: when a signal appears, a clean LADDER of horizontal
+//    lines — TP on top, BUY (or SELL) in the middle, SL below (for
+//    shorts the order flips: SL / SELL / TP) — each labeled with its
+//    price. TP2 stays in the panel. Max 4 ladders on chart.
 //    ALERTS + SIGNALS fire in the THREE SESSIONS ONLY:
 //    Asia 00-08 · London 07-16 · NY 12-21 UTC — blocked 21:00-00:00.
 //    NO SPAM: cooldown between entries (default 8 bars).
 //    PREDICTION CANDLE: a small ghost candle right of live price —
-//    the live swing projection (where the forming ghost points).
+//    the swing projected by DATA: half the average of the last
+//    completed ghost bodies (min 0.15 ATR), in the live swing's
+//    direction.
 //    Simple ▲▼ markers + ◆ flip diamonds also shown.
 //    Alerts: FLOW LONG / FLOW SHORT / FLOW turned UP / DOWN.
 //
@@ -126,6 +129,9 @@ if newG and not na(gStart) and bar_index > gStart and not na(gO)
     bBot = math.min(gO, gC)
     array.push(gBodies, box.new(gStart, bTop, bar_index - 1, bBot, bgcolor = color.new(gc, 88), border_color = color.new(gc, 68), border_width = 1))
     array.push(gWicks, line.new(f_ghostCenter(gStart, bar_index - 1), gH, f_ghostCenter(gStart, bar_index - 1), gL, color = color.new(gc, 60), width = 1))
+    array.push(pHeights, math.abs(gC - gO))
+    if array.size(pHeights) > 6
+        array.remove(pHeights, 0)
     if array.size(gBodies) > maxGhosts
         box.delete(array.get(gBodies, 0))
         line.delete(array.get(gWicks, 0))
@@ -157,18 +163,28 @@ if not showLive
     liveWick := line(na)
 
 // small prediction candle: where the forming ghost points if the swing continues
+var pHeights = array.new_float(0)
 var box predBody = na
 if showPredict and not na(vO) and not na(vC) and not na(atr)
     pUp = vC >= vO
     pc = pUp ? ghostUp : ghostDn
-    ph = math.max(math.abs(vC - vO) * 0.5, 0.25 * atr)
+    // small swing, predicted by data: half the average of the last
+    // completed ghost bodies (min 0.15 ATR)
+    float ph = na
+    if array.size(pHeights) > 0
+        float s = 0.0
+        for i = 0 to array.size(pHeights) - 1
+            s += array.get(pHeights, i)
+        ph := s / array.size(pHeights) * 0.5
+    if na(ph) or ph < 0.15 * atr
+        ph := 0.15 * atr
     pTop = pUp ? close + ph : close
     pBot = pUp ? close : close - ph
     if na(predBody)
-        predBody := box.new(bar_index + 2, pTop, bar_index + 5, pBot, bgcolor = color.new(pc, 78), border_color = color.new(pc, 52), border_width = 1)
+        predBody := box.new(bar_index + 2, pTop, bar_index + 4, pBot, bgcolor = color.new(pc, 78), border_color = color.new(pc, 52), border_width = 1)
     else
         box.set_lefttop(predBody, bar_index + 2, pTop)
-        box.set_rightbottom(predBody, bar_index + 5, pBot)
+        box.set_rightbottom(predBody, bar_index + 4, pBot)
         box.set_bgcolor(predBody, color.new(pc, 78))
         box.set_border_color(predBody, color.new(pc, 52))
 else
@@ -176,8 +192,12 @@ else
     predBody := box(na)
 
 // ---- flow signal engine — CLOSED BARS ONLY (strict no-repaint) ------------------------------
-var tTrend = array.new_line(0)
-var sigLbls = array.new_label(0)
+var lTP = array.new_line(0)
+var lE = array.new_line(0)
+var lSL = array.new_line(0)
+var lbTP = array.new_label(0)
+var lbE = array.new_label(0)
+var lbSL = array.new_label(0)
 var int sigN = 0
 var int lastLongBar = -1000
 var int lastShortBar = -1000
@@ -222,13 +242,26 @@ if barstate.isconfirmed
         lastSL := slP
         lastTP1 := tp1P
         lastTP2 := tp2P
-        if array.size(tTrend) >= 8
-            line.delete(array.get(tTrend, 0))
-            label.delete(array.get(sigLbls, 0))
-            array.remove(tTrend, 0)
-            array.remove(sigLbls, 0)
-        array.push(tTrend, line.new(bar_index - pbBars + 1, pullLo, bar_index, entryP, color = color.new(ghostUp, 15), width = 2, extend = extend.right))
-        array.push(sigLbls, label.new(bar_index, low, "BUY · E " + str.tostring(entryP, "#.##") + "\nSL " + str.tostring(slP, "#.##") + " · TP1 " + str.tostring(tp1P, "#.##") + "\nTP2 " + str.tostring(tp2P, "#.##"), style = label.style_label_up, color = color.new(color.black, 100), textcolor = color.new(ghostUp, 5), size = size.small))
+        if array.size(lE) >= 4
+            line.delete(array.get(lTP, 0))
+            line.delete(array.get(lE, 0))
+            line.delete(array.get(lSL, 0))
+            label.delete(array.get(lbTP, 0))
+            label.delete(array.get(lbE, 0))
+            label.delete(array.get(lbSL, 0))
+            array.remove(lTP, 0)
+            array.remove(lE, 0)
+            array.remove(lSL, 0)
+            array.remove(lbTP, 0)
+            array.remove(lbE, 0)
+            array.remove(lbSL, 0)
+        le = bar_index + 28
+        array.push(lTP, line.new(bar_index, tp1P, le, tp1P, color = color.new(color.green, 30), width = 1))
+        array.push(lE, line.new(bar_index, entryP, le, entryP, color = color.new(ghostUp, 0), width = 2))
+        array.push(lSL, line.new(bar_index, slP, le, slP, color = color.new(color.red, 0), width = 1, style = line.style_dashed))
+        array.push(lbTP, label.new(le + 1, tp1P, "TP " + str.tostring(tp1P, "#.##"), style = label.style_label_left, color = color.new(color.black, 100), textcolor = color.new(color.green, 15), size = size.tiny))
+        array.push(lbE, label.new(le + 1, entryP, "BUY " + str.tostring(entryP, "#.##"), style = label.style_label_left, color = color.new(color.black, 100), textcolor = color.new(ghostUp, 5), size = size.tiny))
+        array.push(lbSL, label.new(le + 1, slP, "SL " + str.tostring(slP, "#.##"), style = label.style_label_left, color = color.new(color.black, 100), textcolor = color.new(color.red, 15), size = size.tiny))
     // SHORT: big flow down + pullback touched the slow EMA zone + momentum resumption down
     if showSignals and flowDn and pullHi > emaS and turnDn and (not confirmEma or close < emaF) and bar_index - lastShortBar > coolBars and not sessDead
         sigShort := true
@@ -247,13 +280,26 @@ if barstate.isconfirmed
         lastSL := slP
         lastTP1 := tp1P
         lastTP2 := tp2P
-        if array.size(tTrend) >= 8
-            line.delete(array.get(tTrend, 0))
-            label.delete(array.get(sigLbls, 0))
-            array.remove(tTrend, 0)
-            array.remove(sigLbls, 0)
-        array.push(tTrend, line.new(bar_index - pbBars + 1, pullHi, bar_index, entryP, color = color.new(ghostDn, 15), width = 2, extend = extend.right))
-        array.push(sigLbls, label.new(bar_index, high, "SELL · E " + str.tostring(entryP, "#.##") + "\nSL " + str.tostring(slP, "#.##") + " · TP1 " + str.tostring(tp1P, "#.##") + "\nTP2 " + str.tostring(tp2P, "#.##"), style = label.style_label_down, color = color.new(color.black, 100), textcolor = color.new(ghostDn, 5), size = size.small))
+        if array.size(lE) >= 4
+            line.delete(array.get(lTP, 0))
+            line.delete(array.get(lE, 0))
+            line.delete(array.get(lSL, 0))
+            label.delete(array.get(lbTP, 0))
+            label.delete(array.get(lbE, 0))
+            label.delete(array.get(lbSL, 0))
+            array.remove(lTP, 0)
+            array.remove(lE, 0)
+            array.remove(lSL, 0)
+            array.remove(lbTP, 0)
+            array.remove(lbE, 0)
+            array.remove(lbSL, 0)
+        le = bar_index + 28
+        array.push(lSL, line.new(bar_index, slP, le, slP, color = color.new(color.red, 0), width = 1, style = line.style_dashed))
+        array.push(lE, line.new(bar_index, entryP, le, entryP, color = color.new(ghostDn, 0), width = 2))
+        array.push(lTP, line.new(bar_index, tp1P, le, tp1P, color = color.new(color.green, 30), width = 1))
+        array.push(lbSL, label.new(le + 1, slP, "SL " + str.tostring(slP, "#.##"), style = label.style_label_left, color = color.new(color.black, 100), textcolor = color.new(color.red, 15), size = size.tiny))
+        array.push(lbE, label.new(le + 1, entryP, "SELL " + str.tostring(entryP, "#.##"), style = label.style_label_left, color = color.new(color.black, 100), textcolor = color.new(ghostDn, 5), size = size.tiny))
+        array.push(lbTP, label.new(le + 1, tp1P, "TP " + str.tostring(tp1P, "#.##"), style = label.style_label_left, color = color.new(color.black, 100), textcolor = color.new(color.green, 15), size = size.tiny))
 
 // ---- plots + alerts ------------------------------------------------------------------------------
 plotshape(sigLong,  style = shape.triangleup,   location = location.belowbar, color = color.new(#14b8a6, 0), size = size.small, title = "FLOW LONG")
@@ -289,7 +335,7 @@ if showPanel and barstate.islast
     table.cell(tb, 2, 2, ghostTf + (showLive ? " · live on" : "") + (showPredict ? " · predict" : "") + " · " + ghostMode, text_color = color.new(color.gray, 30), text_size = size.tiny)
     table.cell(tb, 0, 3, "signals fired", text_color = color.new(color.white, 25), text_size = size.tiny)
     table.cell(tb, 1, 3, str.tostring(sigN), text_color = color.new(color.white, 20), text_size = size.tiny)
-    table.cell(tb, 2, 3, "clean chart · markers only", text_color = color.new(color.gray, 30), text_size = size.tiny)
+    table.cell(tb, 2, 3, "TP/BUY/SL ladder setups", text_color = color.new(color.gray, 30), text_size = size.tiny)
     string lsDir = lastDir == 1 ? "▲ LONG" : lastDir == -1 ? "▼ SHORT" : "—"
     string lsE = lastDir == 0 ? "" : "E " + str.tostring(lastE, "#.##")
     string lsRest = lastDir == 0 ? "" : "SL " + str.tostring(lastSL, "#.##") + " · TP " + str.tostring(lastTP1, "#.##") + " / " + str.tostring(lastTP2, "#.##")

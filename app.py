@@ -78,8 +78,17 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "10.34"
+SYSTEM_VERSION = "10.35"
 SYSTEM_CHANGELOG = {
+    "10.35": [
+        "GHOST v6 \u2014 ladder setups + data-driven prediction candle: "
+        "setups now draw as a clean TP / BUY / SL ladder of labeled "
+        "horizontal lines (SL / SELL / TP for shorts, max 4 on chart) "
+        "instead of trendlines and text blocks; the prediction ghost "
+        "candle is smaller and projected from DATA \u2014 half the "
+        "average of the last completed ghost bodies (min 0.15 ATR) in "
+        "the live swing's direction. Members: re-copy GHOST",
+    ],
     "10.34": [
         "GHOST v5 \u2014 session-gated alerts and full setups: signals and "
         "alerts now fire in the THREE sessions only (Asia 00-08, London "

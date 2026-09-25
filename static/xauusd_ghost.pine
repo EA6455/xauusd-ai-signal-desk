@@ -17,10 +17,11 @@
 //    ONLY when both agree DOWN (confirmed HTF bars, no lookahead).
 //    Entry = momentum resumption after a pullback: price dips to the
 //    slow EMA, then closes back through the fast EMA in the flow's
-//    direction. Every signal draws the full trade with TRENDLINE
-//    ENTRIES — no boxes: a trendline anchored at the pullback extreme
-//    through the entry, extended right (break of it = momentum gone),
-//    plus SL beyond the recent swing and TP1 0.75R / TP2 1.5R levels.
+//    direction. CLEAN CHART: signals are simple ▲▼ markers
+//    (+ ◆ flip diamonds) and alerts — nothing else is drawn
+//    except the ghosts. The trade numbers (entry, SL beyond the
+//    recent swing, TP1 0.75R, TP2 1.5R) live in the panel's
+//    LAST SIGNAL row and in the flow of alerts.
 //    Alerts: FLOW LONG / FLOW SHORT / FLOW turned UP / DOWN.
 //
 //  HONESTY: this is a NEW trend-following engine. The desk's measured
@@ -32,7 +33,7 @@
 //  not history.
 // ============================================================================
 indicator("GHOST", overlay = true,
-     max_boxes_count = 500, max_labels_count = 100, max_lines_count = 300)
+     max_boxes_count = 500, max_lines_count = 300)
 
 // ---- inputs: ghost candles -----------------------------------------------------
 grpG = "Ghost candles (the big flow, made visible)"
@@ -146,12 +147,12 @@ if not showLive
     liveWick := line(na)
 
 // ---- flow signal engine — CLOSED BARS ONLY (strict no-repaint) ------------------------------
-var tTrend = array.new_line(0)
-var tSL = array.new_line(0)
-var tTP1 = array.new_line(0)
-var tTP2 = array.new_line(0)
-var sigLbls = array.new_label(0)
 var int sigN = 0
+var int lastDir = 0
+var float lastE = na
+var float lastSL = na
+var float lastTP1 = na
+var float lastTP2 = na
 var bool wasUp = false
 var bool wasDn = false
 bool sigLong = false
@@ -182,24 +183,11 @@ if barstate.isconfirmed
             slP := entryP - riskP
         tp1P = entryP + tp1R * riskP
         tp2P = entryP + tp2R * riskP
-        if array.size(tTrend) >= 12
-            line.delete(array.get(tTrend, 0))
-            line.delete(array.get(tSL, 0))
-            line.delete(array.get(tTP1, 0))
-            line.delete(array.get(tTP2, 0))
-            array.remove(tTrend, 0)
-            array.remove(tSL, 0)
-            array.remove(tTP1, 0)
-            array.remove(tTP2, 0)
-        ext = bar_index + 34
-        array.push(tTrend, line.new(bar_index - pbBars + 1, pullLo, bar_index, entryP, color = color.new(ghostUp, 15), width = 2, extend = extend.right))
-        array.push(tSL, line.new(bar_index, slP, ext, slP, color = color.new(color.red, 0), width = 2, style = line.style_dashed))
-        array.push(tTP1, line.new(bar_index, tp1P, ext, tp1P, color = color.new(color.green, 35), width = 1))
-        array.push(tTP2, line.new(bar_index, tp2P, ext, tp2P, color = color.new(color.green, 0), width = 2))
-        array.push(sigLbls, label.new(bar_index, low, "▲ LONG · FLOW\nE " + str.tostring(entryP, "#.##") + "\nSL " + str.tostring(slP, "#.##") + "\nTP1 " + str.tostring(tp1P, "#.##") + "\nTP2 " + str.tostring(tp2P, "#.##"), style = label.style_label_up, color = color.new(ghostUp, 10), textcolor = color.white, size = size.small))
-        if array.size(sigLbls) > 40
-            label.delete(array.get(sigLbls, 0))
-            array.remove(sigLbls, 0)
+        lastDir := 1
+        lastE := entryP
+        lastSL := slP
+        lastTP1 := tp1P
+        lastTP2 := tp2P
     // SHORT: big flow down + pullback touched the slow EMA zone + momentum resumption down
     if showSignals and flowDn and pullHi > emaS and crossFDn and close < emaS and close < open and not sessDead
         sigShort := true
@@ -212,24 +200,11 @@ if barstate.isconfirmed
             slP := entryP + riskP
         tp1P = entryP - tp1R * riskP
         tp2P = entryP - tp2R * riskP
-        if array.size(tTrend) >= 12
-            line.delete(array.get(tTrend, 0))
-            line.delete(array.get(tSL, 0))
-            line.delete(array.get(tTP1, 0))
-            line.delete(array.get(tTP2, 0))
-            array.remove(tTrend, 0)
-            array.remove(tSL, 0)
-            array.remove(tTP1, 0)
-            array.remove(tTP2, 0)
-        ext = bar_index + 34
-        array.push(tTrend, line.new(bar_index - pbBars + 1, pullHi, bar_index, entryP, color = color.new(ghostDn, 15), width = 2, extend = extend.right))
-        array.push(tSL, line.new(bar_index, slP, ext, slP, color = color.new(color.red, 0), width = 2, style = line.style_dashed))
-        array.push(tTP1, line.new(bar_index, tp1P, ext, tp1P, color = color.new(color.green, 35), width = 1))
-        array.push(tTP2, line.new(bar_index, tp2P, ext, tp2P, color = color.new(color.green, 0), width = 2))
-        array.push(sigLbls, label.new(bar_index, high, "▼ SHORT · FLOW\nE " + str.tostring(entryP, "#.##") + "\nSL " + str.tostring(slP, "#.##") + "\nTP1 " + str.tostring(tp1P, "#.##") + "\nTP2 " + str.tostring(tp2P, "#.##"), style = label.style_label_down, color = color.new(ghostDn, 10), textcolor = color.white, size = size.small))
-        if array.size(sigLbls) > 40
-            label.delete(array.get(sigLbls, 0))
-            array.remove(sigLbls, 0)
+        lastDir := -1
+        lastE := entryP
+        lastSL := slP
+        lastTP1 := tp1P
+        lastTP2 := tp2P
 
 // ---- plots + alerts ------------------------------------------------------------------------------
 plotshape(sigLong,  style = shape.triangleup,   location = location.belowbar, color = color.new(#14b8a6, 0), size = size.small, title = "FLOW LONG")
@@ -250,7 +225,7 @@ var table tb = na
 if showPanel and barstate.islast
     if na(tb)
         posMap = posOpt == "Top Right" ? position.top_right : posOpt == "Top Left" ? position.top_left : posOpt == "Bottom Right" ? position.bottom_right : position.bottom_left
-        tb := table.new(posMap, 3, 6, bgcolor = color.new(#0a0e17, 15), border_width = 1, border_color = color.new(color.gray, 72))
+        tb := table.new(posMap, 3, 7, bgcolor = color.new(#0a0e17, 15), border_width = 1, border_color = color.new(color.gray, 72))
     hdr = color.new(color.gray, 62)
     table.cell(tb, 0, 0, "GHOST", text_color = color.new(color.white, 8), text_size = size.small, bgcolor = hdr)
     table.cell(tb, 1, 0, "follow the flow", text_color = color.new(color.white, 8), text_size = size.small, bgcolor = hdr)
@@ -265,10 +240,16 @@ if showPanel and barstate.islast
     table.cell(tb, 2, 2, ghostTf + (showLive ? " · live on" : "") + " · " + ghostMode, text_color = color.new(color.gray, 30), text_size = size.tiny)
     table.cell(tb, 0, 3, "signals fired", text_color = color.new(color.white, 25), text_size = size.tiny)
     table.cell(tb, 1, 3, str.tostring(sigN), text_color = color.new(color.white, 20), text_size = size.tiny)
-    table.cell(tb, 2, 3, "trendline entries · no boxes", text_color = color.new(color.gray, 30), text_size = size.tiny)
-    table.cell(tb, 0, 4, "session", text_color = color.new(color.white, 25), text_size = size.tiny)
-    table.cell(tb, 1, 4, sessDead ? "dead 21-01" : "live", text_color = sessDead ? color.new(color.red, 10) : color.new(color.green, 10), text_size = size.tiny)
-    table.cell(tb, 2, 4, "signals need live session", text_color = color.new(color.gray, 30), text_size = size.tiny)
-    table.cell(tb, 0, 5, "new engine · not yet desk-measured", text_color = color.new(color.gray, 45), text_size = size.tiny)
-    table.cell(tb, 1, 5, "closed bars · no repaint", text_color = color.new(color.gray, 45), text_size = size.tiny)
-    table.cell(tb, 2, 5, "trade small first", text_color = color.new(color.gray, 45), text_size = size.tiny)
+    table.cell(tb, 2, 3, "clean chart · markers only", text_color = color.new(color.gray, 30), text_size = size.tiny)
+    string lsDir = lastDir == 1 ? "▲ LONG" : lastDir == -1 ? "▼ SHORT" : "—"
+    string lsE = lastDir == 0 ? "" : "E " + str.tostring(lastE, "#.##")
+    string lsRest = lastDir == 0 ? "" : "SL " + str.tostring(lastSL, "#.##") + " · TP " + str.tostring(lastTP1, "#.##") + " / " + str.tostring(lastTP2, "#.##")
+    table.cell(tb, 0, 4, "last signal", text_color = color.new(color.white, 25), text_size = size.tiny)
+    table.cell(tb, 1, 4, lsDir, text_color = lastDir == 1 ? color.new(color.green, 10) : lastDir == -1 ? color.new(color.red, 10) : color.new(color.gray, 20), text_size = size.tiny)
+    table.cell(tb, 2, 4, lastDir == 0 ? "" : lsE + " · " + lsRest, text_color = color.new(color.gray, 25), text_size = size.tiny)
+    table.cell(tb, 0, 5, "session", text_color = color.new(color.white, 25), text_size = size.tiny)
+    table.cell(tb, 1, 5, sessDead ? "dead 21-01" : "live", text_color = sessDead ? color.new(color.red, 10) : color.new(color.green, 10), text_size = size.tiny)
+    table.cell(tb, 2, 5, "signals need live session", text_color = color.new(color.gray, 30), text_size = size.tiny)
+    table.cell(tb, 0, 6, "new engine · not yet desk-measured", text_color = color.new(color.gray, 45), text_size = size.tiny)
+    table.cell(tb, 1, 6, "closed bars · no repaint", text_color = color.new(color.gray, 45), text_size = size.tiny)
+    table.cell(tb, 2, 6, "trade small first", text_color = color.new(color.gray, 45), text_size = size.tiny)

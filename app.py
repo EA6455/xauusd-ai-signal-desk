@@ -78,8 +78,15 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "10.31"
+SYSTEM_VERSION = "10.32"
 SYSTEM_CHANGELOG = {
+    "10.32": [
+        "GHOST v3 \u2014 clean chart: all trade drawings removed. Signals "
+        "are now simple \u25b2\u25bc markers (plus \u25c6 flow-flip "
+        "diamonds) and alerts; the trade numbers (entry, SL, TP1 0.75R, "
+        "TP2 1.5R) live in the panel's new LAST SIGNAL row. Only the "
+        "ghost candles are drawn. Members: re-copy GHOST",
+    ],
     "10.31": [
         "GHOST v2: ghost candles now AUTO-adapt to any chart \u2014 the 1m "
         "chart gets 15m ghosts (5m\u219230m, 15m\u21921H, 30m/1H\u21924H, "

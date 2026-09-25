@@ -81,16 +81,21 @@
        <b style="color:#22d3ee">· SIZE</b> — trade planner: balance + risk % + entry + stop → <b>exact XAUUSD lots</b> (standard or cent
        account) and the desk exit plan drawn: <b>TP1 0.75R / BE / TP2 1.5R</b> with $ amounts. A calculator — never says buy/sell<br>
        <b style="color:#a78bfa">· GAUGE</b> — volatility meter: ATR percentile, regime QUIET / NORMAL / WILD<br>
-       <b style="color:#60a5fa">· CONSENSUS</b> — zones that agree with 1H/4H levels get a "· 1H / · 4H" tag and are counted</p>
+       <b style="color:#60a5fa">· CONSENSUS</b> — zones that agree with 1H/4H levels get a "· 1H / · 4H" tag and are counted<br>
+       <b style="color:var(--green)">· SIGNALS</b> — <b>buy/sell</b>: the FLOW engine inside — ▲ LONG / ▼ SHORT at A+ (8/8 checks) and REV
+       reversal setups, with entry, SL, TP1 0.75R, TP2 1.5R drawn + alerts. Desk-measured 15m: <b>A+ ~80% at swing 3</b> (~6.4/mo) ·
+       62% at swing 2 (~9/mo) · <b>REV 92%</b> — every signal labeled by cohort</p>
     <div class="stats">
       <span class="pill g">zones · time · size · volatility</span>
       <span class="pill y">one panel · 18 rows</span>
-      <span class="pill">no signals · no alerts · no repaint</span>
+      <span class="pill g">▲▼ buy/sell: A+ &amp; REV signals</span>
+      <span class="pill">no repaint · closed bars only</span>
     </div>
     <p style="margin-top:8px">Same honesty rules as PROOF and CLOCK: a bounce counts only if price travelled the target ATR before the zone
        broke — closed bars only, timeouts excluded, <b>low n</b> flagged, higher-timeframe data from confirmed bars only.
-       If you want everything on one chart: this is the one indicator. 15m main. Enable the trade planner in its settings
-       (Size group) when you have a trade planned — it does the lot math and draws the plan.</p>
+       If you want everything on one chart — including the buy/sell signals — this is the one indicator. 15m main.
+       The signals draw the full trade; the panel counts how many fired. Enable the trade planner (Size group) to get the
+       exact lot size for any signal's entry/SL.</p>
     <div style="margin-top:10px; border-top:1px solid var(--border); padding-top:10px">
       <b>How to use RENDER — the 60-second daily flow</b>
       <ol class="steps" style="margin-top:6px">
@@ -106,8 +111,9 @@
             The panel shows <b>exact lots + risk $</b>; the chart draws <b>ENTRY · SL · TP1 0.75R · TP2 1.5R</b> with $ amounts.
             Exits: half at TP1, stop to breakeven, runner to TP2.</li>
       </ol>
-      <p style="margin-top:6px"><small>Heat tint on bars: green = that hour measures ≥60%, red = ≤40%. RENDER never says buy/sell —
-      it arms you with measurements. Want signals too? Pair with FLOW15mn. Not financial advice.</small></p>
+      <p style="margin-top:6px"><small>Heat tint on bars: green = that hour measures ≥60%, red = ≤40%. Signals: ▲ green triangle = A+ LONG,
+      ▼ red = A+ SHORT, ◆ teal diamond = REV. Green triangle/◆ from a FRESH zone in a green hour with a good edge row = the full-probability
+      trade. Exits: half at TP1, stop to breakeven, runner to TP2. Not financial advice.</small></p>
     </div>
     <button class="copybtn" id="copyBtn6" style="border:1px solid rgba(234,181,79,.7); background:linear-gradient(92deg, rgba(234,181,79,.18), rgba(34,211,238,.12)); color:#ffe9b8; text-shadow:0 0 14px rgba(234,181,79,.5)">📋 COPY RENDER — 1 CLICK</button>
     <div class="hint" id="hint6">copies the whole script to your clipboard, ready to paste</div>

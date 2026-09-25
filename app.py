@@ -78,8 +78,19 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "10.28"
+SYSTEM_VERSION = "10.29"
 SYSTEM_CHANGELOG = {
+    "10.29": [
+        "RENDER TradingView indicator now tells buy/sell: a sixth "
+        "module, SIGNALS, ports the FLOW15mn engine inside \u2014 A+ "
+        "(8/8 checks) and REV reversal setups fire as \u25B2 LONG / "
+        "\u25BC SHORT with entry, SL, TP1 0.75R and TP2 1.5R drawn on "
+        "chart, plus four alert conditions. Desk-measured 15m stats, "
+        "labeled per cohort: A+ ~80% at swing 3 (~6.4/mo), 62% at swing "
+        "2 (~9/mo), REV 92%. Signals evaluate on closed bars only \u2014 "
+        "no repaint. Panel gains a 'signals fired' counter; all six "
+        "indicator sources reposted to the INDICATOR topic",
+    ],
     "10.28": [
         "RENDER card now carries the full usage guide: the 60-second "
         "daily flow (volatility \u2192 now hour \u2192 edge \u2192 pick "
@@ -4614,10 +4625,16 @@ def _announce_indicator():
         "\u2022 GAUGE \u2014 volatility meter: ATR percentile, regime "
         "QUIET / NORMAL / WILD\n"
         "\u2022 CONSENSUS \u2014 zones that agree with 1H/4H levels get "
-        "a \u00b7 1H / \u00b7 4H tag and are counted\n\n"
-        "Same honesty rules: bounce = target ATR before break, closed "
-        "bars only, timeouts excluded, low n flagged, no repaint, no "
-        "signals, no alerts. Measured, not promised.\n"
+        "a \u00b7 1H / \u00b7 4H tag and are counted\n"
+        "\u2022 SIGNALS \u2014 the FLOW engine inside: \u25B2 LONG / \u25BC "
+        "SHORT at A+ (8/8 checks) and REV reversal setups, with entry, "
+        "SL, TP1 0.75R, TP2 1.5R drawn and alert conditions. Desk-"
+        "measured on 15m: A+ ~80% at swing 3 (~6.4/mo) \u00b7 62% at "
+        "swing 2 (~9/mo) \u00b7 REV 92% (n=13) \u2014 every signal labeled "
+        "by cohort.\n\n"
+        "Honesty rules: bounce = target ATR before break, closed bars "
+        "only, timeouts excluded, low n flagged, no repaint. Measured, "
+        "not promised.\n"
         "One-click copy: the website front page \u2014 RENDER card.")
     total = n1 + n2 + n3 + n4 + n5 + n6
     if total:

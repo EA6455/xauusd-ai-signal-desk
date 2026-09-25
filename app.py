@@ -78,8 +78,18 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "10.32"
+SYSTEM_VERSION = "10.33"
 SYSTEM_CHANGELOG = {
+    "10.33": [
+        "GHOST v4 \u2014 no more late entries and fixed SL/TP: entries now "
+        "fire on the FIRST resumption candle after the pullback (closes "
+        "beyond the prior bar's extreme \u2014 1-3 bars earlier than the "
+        "old EMA-cross wait, optional stricter EMA mode in settings), "
+        "the stop is anchored TIGHT at the pullback extreme instead of "
+        "a wide 10-bar swing, so TP1 0.75R / TP2 1.5R sit closer and "
+        "reachable, and a cooldown blocks signal spam. Members: "
+        "re-copy GHOST",
+    ],
     "10.32": [
         "GHOST v3 \u2014 clean chart: all trade drawings removed. Signals "
         "are now simple \u25b2\u25bc markers (plus \u25c6 flow-flip "

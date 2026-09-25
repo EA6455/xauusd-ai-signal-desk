@@ -219,7 +219,10 @@
        (manual override in settings). You always see the flow you are trading.</p>
     <p style="margin-top:6px"><b style="color:#f43f5e">· FLOW SIGNALS</b> — longs <b>only</b> when 1H and 4H trends agree UP, shorts <b>only</b> when both
        agree DOWN (confirmed HTF bars, no lookahead). Entry = momentum resumption after a pullback: price dips toward the slow EMA, then closes
-       back through the fast EMA in the flow's direction. <b>Clean chart:</b> signals are simple ▲▼ markers (+ ◆ flow-flip diamonds) and alerts —
+       — <b>no late entries:</b> the signal fires on the <b>first resumption candle</b> after the pullback (the bar closing beyond the prior
+       bar's extreme — 1–3 bars earlier than an EMA cross; stricter EMA mode optional in settings). <b>Fixed SL/TP:</b> the stop anchors
+       <b>tight at the pullback extreme</b>, so <b>TP1 0.75R / TP2 1.5R</b> sit closer and reachable, with a cooldown against signal spam.
+       <b>Clean chart:</b> signals are simple ▲▼ markers (+ ◆ flow-flip diamonds) and alerts —
        nothing else is drawn except the ghosts. The trade numbers (entry, SL beyond the recent swing, <b>TP1 0.75R / TP2 1.5R</b>) live in the
        panel's <b>LAST SIGNAL</b> row. Alerts: FLOW LONG / FLOW SHORT / FLOW turned UP / DOWN.</p>
     <div class="stats">

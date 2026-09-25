@@ -15,9 +15,13 @@
 //
 //  · FLOW SIGNALS — longs ONLY when 1H and 4H trends agree UP, shorts
 //    ONLY when both agree DOWN (confirmed HTF bars, no lookahead).
-//    Entry = momentum resumption after a pullback: price dips to the
-//    slow EMA, then closes back through the fast EMA in the flow's
-//    direction. CLEAN CHART: signals are simple ▲▼ markers
+//    Entry = the FIRST resumption candle after the pullback — the bar
+//    that closes beyond the PRIOR bar's extreme in the flow's
+//    direction. No waiting for an EMA cross: 1-3 bars earlier.
+//    (Optional stricter mode in settings requires the fast EMA too.)
+//    SL is anchored TIGHT at the pullback extreme (not a wide swing
+//    lookback), so TP1 0.75R / TP2 1.5R sit closer and are reachable.
+//    CLEAN CHART: signals are simple ▲▼ markers
 //    (+ ◆ flip diamonds) and alerts — nothing else is drawn
 //    except the ghosts. The trade numbers (entry, SL beyond the
 //    recent swing, TP1 0.75R, TP2 1.5R) live in the panel's
@@ -51,7 +55,8 @@ showSignals = input.bool(true, "Show flow signals — longs with 1H+4H up, short
 fastLen = input.int(9,  "Fast EMA",  minval = 3, maxval = 50, group = grpF)
 slowLen = input.int(21, "Slow EMA",  minval = 5, maxval = 200, group = grpF)
 pbBars  = input.int(6,  "Pullback window (bars price must dip toward the slow EMA)", minval = 2, maxval = 20, group = grpF)
-slBars  = input.int(10, "Stop anchor: swing lookback (bars)", minval = 3, maxval = 40, group = grpF)
+coolBars = input.int(5, "Cooldown between signals (bars)", minval = 1, maxval = 30, group = grpF)
+confirmEma = input.bool(false, "Stricter entry: close must also be beyond the fast EMA (later, fewer)", group = grpF)
 slBuf   = input.float(0.15, "Stop buffer beyond swing (ATR)", minval = 0.0, step = 0.05, group = grpF)
 tp1R    = input.float(0.75, "TP1 (R) — half off", minval = 0.1, step = 0.05, group = grpF)
 tp2R    = input.float(1.5,  "TP2 (R) — runner",   minval = 0.2, step = 0.05, group = grpF)
@@ -148,6 +153,8 @@ if not showLive
 
 // ---- flow signal engine — CLOSED BARS ONLY (strict no-repaint) ------------------------------
 var int sigN = 0
+var int lastLongBar = -1000
+var int lastShortBar = -1000
 var int lastDir = 0
 var float lastE = na
 var float lastSL = na
@@ -162,8 +169,8 @@ bool flipDn = false
 
 pullLo = ta.lowest(low, pbBars)
 pullHi = ta.highest(high, pbBars)
-crossFUp = ta.crossover(close, emaF)
-crossFDn = ta.crossunder(close, emaF)
+turnUp = close > open and close > high[1]
+turnDn = close < open and close < low[1]
 
 if barstate.isconfirmed
     // flow flips (for alerts + panel)
@@ -172,11 +179,12 @@ if barstate.isconfirmed
     wasUp := flowUp
     wasDn := flowDn
     // LONG: big flow up + pullback touched the slow EMA zone + momentum resumption
-    if showSignals and flowUp and pullLo < emaS and crossFUp and close > emaS and close > open and not sessDead
+    if showSignals and flowUp and pullLo < emaS and turnUp and (not confirmEma or close > emaF) and bar_index - lastLongBar > coolBars and not sessDead
         sigLong := true
         sigN += 1
+        lastLongBar := bar_index
         entryP = close
-        slP = ta.lowest(low, slBars) - slBuf * atr
+        slP = pullLo - slBuf * atr
         riskP = entryP - slP
         if riskP < 0.2 * atr
             riskP := 0.2 * atr
@@ -189,11 +197,12 @@ if barstate.isconfirmed
         lastTP1 := tp1P
         lastTP2 := tp2P
     // SHORT: big flow down + pullback touched the slow EMA zone + momentum resumption down
-    if showSignals and flowDn and pullHi > emaS and crossFDn and close < emaS and close < open and not sessDead
+    if showSignals and flowDn and pullHi > emaS and turnDn and (not confirmEma or close < emaF) and bar_index - lastShortBar > coolBars and not sessDead
         sigShort := true
         sigN += 1
+        lastShortBar := bar_index
         entryP = close
-        slP = ta.highest(high, slBars) + slBuf * atr
+        slP = pullHi + slBuf * atr
         riskP = slP - entryP
         if riskP < 0.2 * atr
             riskP := 0.2 * atr

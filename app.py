@@ -78,8 +78,21 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "10.25"
+SYSTEM_VERSION = "10.26"
 SYSTEM_CHANGELOG = {
+    "10.26": [
+        "SIXTH TradingView indicator: RENDER \u2014 the complete system, "
+        "an all-in-one that combines PROOF (self-proving zones + road "
+        "map) and CLOCK (time-of-day stats + heat tint) with three new "
+        "modules: SIZE (trade planner \u2014 balance, risk %, entry, "
+        "stop \u2192 exact XAUUSD lots, standard or cent, with the "
+        "TP1 0.75R / BE / TP2 1.5R plan drawn and $ amounts; a "
+        "calculator, never buy/sell), GAUGE (ATR percentile volatility "
+        "regime QUIET/NORMAL/WILD) and CONSENSUS (zones agreeing with "
+        "1H/4H confirmed pivot levels get tags and counts). One panel, "
+        "18 rows. Served at /pine6, flagship card on the website; all "
+        "six indicator sources reposted to the INDICATOR topic",
+    ],
     "10.25": [
         "FIFTH TradingView indicator: CLOCK [Time-of-Day Proof] \u2014 "
         "PROOF's zone engine scored by hour of day: session table "
@@ -4569,7 +4582,30 @@ def _announce_indicator():
         "signals, no alerts.\n"
         "Stack with PROOF: FRESH zone + strong hour = the A-setup.\n"
         "One-click copy: the website front page.")
-    total = n1 + n2 + n3 + n4 + n5
+    time.sleep(1.5)
+    # indicator #6 — RENDER: the complete system (all-in-one)
+    n6 = _post_indicator_source(
+        "static/xauusd_render.pine",
+        "\U0001F4A0 RENDER \u2014 THE COMPLETE SYSTEM (all-in-one)\n\n"
+        "Five measured modules in ONE indicator, one panel, one chart:\n"
+        "\u2022 PROOF \u2014 self-proving zones: every label carries its "
+        "own measured track record, base rate + edge, road map with "
+        "NEXT STOP\n"
+        "\u2022 CLOCK \u2014 time-of-day proof: best & worst hour, the "
+        "NOW row, walk-forward heat tint\n"
+        "\u2022 SIZE \u2014 trade planner: balance + risk % + entry + "
+        "stop \u2192 exact XAUUSD lots (standard or cent account) and "
+        "the desk exit plan drawn: TP1 0.75R / BE / TP2 1.5R with $ "
+        "amounts. A calculator \u2014 never says buy/sell\n"
+        "\u2022 GAUGE \u2014 volatility meter: ATR percentile, regime "
+        "QUIET / NORMAL / WILD\n"
+        "\u2022 CONSENSUS \u2014 zones that agree with 1H/4H levels get "
+        "a \u00b7 1H / \u00b7 4H tag and are counted\n\n"
+        "Same honesty rules: bounce = target ATR before break, closed "
+        "bars only, timeouts excluded, low n flagged, no repaint, no "
+        "signals, no alerts. Measured, not promised.\n"
+        "One-click copy: the website front page \u2014 RENDER card.")
+    total = n1 + n2 + n3 + n4 + n5 + n6
     if total:
         _tg_post_topic(
             "\U0001F4E6 HOW TO TRADE THE ZONE BOXES (FLOW indicator)\n\n"
@@ -4594,11 +4630,10 @@ def _announce_indicator():
             _tg_topics().get("indicator"))
         time.sleep(1.5)
         _tg_post_topic(
-            "\u2705 All five indicator sources posted \u2014 CLOCK is "
-            "the new one: time-of-day proof. The website (RENDER "
-            "INDICATOR) shows FLOW15mn, PROOF and CLOCK with one-click "
-            "copy \u2014 A+ SNIPER and FRT stay here in the topic. Red "
-            "error in the Pine Editor? Message "
+            "\u2705 All six indicator sources posted \u2014 RENDER is "
+            "the new flagship: PROOF + CLOCK + SIZE + GAUGE + CONSENSUS "
+            "in ONE indicator. One-click copy: the website front page "
+            "\u2014 RENDER card first. Red error in the Pine Editor? Message "
             "the group. Not financial advice \u2014 every signal is scored "
             "honestly on the desk.",
             _tg_topics().get("indicator"))
@@ -4606,7 +4641,7 @@ def _announce_indicator():
         STATE["lastIndicatorPost"] = dict(t=int(time.time()),
                                           parts=total, sent=total)
         _save_state()
-    print(f"[desk] posted all 5 indicators to INDICATOR topic "
+    print(f"[desk] posted all 6 indicators to INDICATOR topic "
           f"({total} parts)", flush=True)
     return total
 
@@ -5741,6 +5776,19 @@ def pine_clock():
     try:
         with open(os.path.join(app.root_path, "static",
                                "xauusd_clock.pine")) as f:
+            txt = f.read()
+        return Response(txt, mimetype="text/plain")
+    except Exception:  # noqa: BLE001
+        return Response("-- indicator file missing --", mimetype="text/plain")
+
+
+@app.route("/pine6")
+def pine_render():
+    """Indicator #6 — RENDER: the complete system. PROOF + CLOCK +
+    SIZE + GAUGE + CONSENSUS in one indicator, one panel."""
+    try:
+        with open(os.path.join(app.root_path, "static",
+                               "xauusd_render.pine")) as f:
             txt = f.read()
         return Response(txt, mimetype="text/plain")
     except Exception:  # noqa: BLE001

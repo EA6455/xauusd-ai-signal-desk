@@ -72,6 +72,31 @@
   <div class="brand">RENDER INDICATOR</div>
   <div class="sub">one-click copy</div>
 
+  <div class="card" style="border-color:rgba(234,181,79,.5); box-shadow:inset 0 1px 0 rgba(234,181,79,.18), 0 20px 54px -26px rgba(0,0,0,.85)">
+    <h1><span style="color:var(--gold)">RENDER</span> — THE COMPLETE SYSTEM · all-in-one</h1>
+    <p><b>Five measured modules in ONE indicator, one panel, one chart:</b></p>
+    <p style="margin-top:6px"><b style="color:var(--gold)">· PROOF</b> — self-proving zones: every label carries its own measured track record,
+       base rate + edge, road map with <b>NEXT STOP</b><br>
+       <b style="color:#fb923c">· CLOCK</b> — time-of-day proof: best &amp; worst hour, the NOW row, walk-forward heat tint<br>
+       <b style="color:#22d3ee">· SIZE</b> — trade planner: balance + risk % + entry + stop → <b>exact XAUUSD lots</b> (standard or cent
+       account) and the desk exit plan drawn: <b>TP1 0.75R / BE / TP2 1.5R</b> with $ amounts. A calculator — never says buy/sell<br>
+       <b style="color:#a78bfa">· GAUGE</b> — volatility meter: ATR percentile, regime QUIET / NORMAL / WILD<br>
+       <b style="color:#60a5fa">· CONSENSUS</b> — zones that agree with 1H/4H levels get a "· 1H / · 4H" tag and are counted</p>
+    <div class="stats">
+      <span class="pill g">zones · time · size · volatility</span>
+      <span class="pill y">one panel · 18 rows</span>
+      <span class="pill">no signals · no alerts · no repaint</span>
+    </div>
+    <p style="margin-top:8px">Same honesty rules as PROOF and CLOCK: a bounce counts only if price travelled the target ATR before the zone
+       broke — closed bars only, timeouts excluded, <b>low n</b> flagged, higher-timeframe data from confirmed bars only.
+       If you want everything on one chart: this is the one indicator. 15m main. Enable the trade planner in its settings
+       (Size group) when you have a trade planned — it does the lot math and draws the plan.</p>
+    <button class="copybtn" id="copyBtn6" style="border:1px solid rgba(234,181,79,.7); background:linear-gradient(92deg, rgba(234,181,79,.18), rgba(34,211,238,.12)); color:#ffe9b8; text-shadow:0 0 14px rgba(234,181,79,.5)">📋 COPY RENDER — 1 CLICK</button>
+    <div class="hint" id="hint6">copies the whole script to your clipboard, ready to paste</div>
+    <div class="meta"><span id="mchars6">…</span><span id="mlines6">…</span></div>
+    <pre class="src" id="src6"><span style="color:var(--muted)">loading source…</span></pre>
+  </div>
+
   <div class="card" style="border-color:rgba(20,184,166,.4)">
     <h1><span class="n2">FLOW15mn</span> — more signals, honestly earned</h1>
     <p>The desk's 15m signal indicator. Two measured cohorts, every signal labeled:
@@ -199,6 +224,8 @@
       hint.textContent = 'auto-copy blocked here — the code is selected, press Ctrl+C / long-press → Copy';
     });
   }
+  wire('copyBtn6', 'hint6', 'src6', 'mchars6', 'mlines6', '/pine6',
+       '✅ COPIED — NOW PASTE IT IN THE PINE EDITOR');
   wire('copyBtn2', 'hint2', 'src2', 'mchars2', 'mlines2', '/pine2',
        '✅ COPIED — NOW PASTE IT IN THE PINE EDITOR');
   wire('copyBtn4', 'hint4', 'src4', 'mchars4', 'mlines4', '/pine4',

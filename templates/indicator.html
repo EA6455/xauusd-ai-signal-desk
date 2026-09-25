@@ -91,6 +91,24 @@
        broke — closed bars only, timeouts excluded, <b>low n</b> flagged, higher-timeframe data from confirmed bars only.
        If you want everything on one chart: this is the one indicator. 15m main. Enable the trade planner in its settings
        (Size group) when you have a trade planned — it does the lot math and draws the plan.</p>
+    <div style="margin-top:10px; border-top:1px solid var(--border); padding-top:10px">
+      <b>How to use RENDER — the 60-second daily flow</b>
+      <ol class="steps" style="margin-top:6px">
+        <li><b>Setup once:</b> 15m XAUUSD chart, paste, then scroll back to load history — more bars = more stats.
+            <small>the panel's numbers grow with what's loaded</small></li>
+        <li><b>Read the panel top-down:</b> <b>volatility</b> row first (WILD → smaller size, wider stops; QUIET → expect chop) →
+            <b>now</b> row (this hour's measured % — green window or not) → <b>edge</b> row (+10 pts or better = zones beat random levels here).</li>
+        <li><b>Pick the zone:</b> solid <b>FRESH</b> box with strong 1st-touch % — <b>· 1H / · 4H</b> tags are extra confirmation (consensus).
+            Dashed TESTED = reversal style only. Gray WEAK = break map, never buy the bounce.</li>
+        <li><b>Follow the map:</b> <b>NEXT STOP</b> = the likeliest destination (nearest untested magnet). Price travels there —
+            expect the reaction AT that box. That's where the measured % applies.</li>
+        <li><b>Plan the trade with SIZE:</b> settings → Size group → enable → balance, risk %, Long/Short, entry (0 = live price), stop.
+            The panel shows <b>exact lots + risk $</b>; the chart draws <b>ENTRY · SL · TP1 0.75R · TP2 1.5R</b> with $ amounts.
+            Exits: half at TP1, stop to breakeven, runner to TP2.</li>
+      </ol>
+      <p style="margin-top:6px"><small>Heat tint on bars: green = that hour measures ≥60%, red = ≤40%. RENDER never says buy/sell —
+      it arms you with measurements. Want signals too? Pair with FLOW15mn. Not financial advice.</small></p>
+    </div>
     <button class="copybtn" id="copyBtn6" style="border:1px solid rgba(234,181,79,.7); background:linear-gradient(92deg, rgba(234,181,79,.18), rgba(34,211,238,.12)); color:#ffe9b8; text-shadow:0 0 14px rgba(234,181,79,.5)">📋 COPY RENDER — 1 CLICK</button>
     <div class="hint" id="hint6">copies the whole script to your clipboard, ready to paste</div>
     <div class="meta"><span id="mchars6">…</span><span id="mlines6">…</span></div>

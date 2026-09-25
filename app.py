@@ -78,8 +78,15 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "10.27"
+SYSTEM_VERSION = "10.28"
 SYSTEM_CHANGELOG = {
+    "10.28": [
+        "RENDER card now carries the full usage guide: the 60-second "
+        "daily flow (volatility \u2192 now hour \u2192 edge \u2192 pick "
+        "the zone \u2192 follow the NEXT STOP \u2192 plan the trade with "
+        "SIZE), plus the heat-tint and honesty notes. Guide also posted "
+        "to the INDICATOR topic",
+    ],
     "10.27": [
         "RENDER runtime fix: the consensus level collector crashed on "
         "bar 0 ('Index -1, array size 0') \u2014 Pine evaluates BOTH "

@@ -139,6 +139,28 @@
     <div class="hint" id="hint4">copies the whole script to your clipboard, ready to paste</div>
     <div class="meta"><span id="mchars4">…</span><span id="mlines4">…</span></div>
     <pre class="src" id="src4"><span style="color:var(--muted)">loading source…</span></pre>
+  <div class="card" style="border-color:rgba(251,146,60,.4)">
+    <h1><span style="color:#fb923c">CLOCK</span> — Time-of-Day Proof · when zones deserve trust</h1>
+    <p><b>PROOF answers WHICH zones deserve trust. CLOCK answers WHEN.</b> It replays your chart's own
+       history, finds every zone the PROOF engine would draw, and scores every touch by the <b>hour of day
+       (UTC)</b> it happened in. Session table: <b>Asia 00–04 / 04–08 · London 08–12 · NY 12–16 / 16–20 ·
+       Late 20–24</b> — measured bounce % + n each. Plus <b>best hour &amp; worst hour</b> (named, with sample
+       size) and zone overall vs the <b>raw pivot-level base rate</b>.</p>
+    <div class="stats">
+      <span class="pill" style="border-color:rgba(251,146,60,.5); color:#fdba74">PROOF for time · stacks on one chart</span>
+      <span class="pill">best &amp; worst hour — measured</span>
+      <span class="pill">heat tint: green ≥60% · red ≤40%</span>
+    </div>
+    <p style="margin-top:8px"><b>Heat tint:</b> every bar is shaded with its hour's measured % — walk-forward,
+       the heat you would have seen then. <b>How to use:</b> compare hours before trading a zone bounce —
+       green-hour touches only, avoid red hours. Stack with PROOF: <b>FRESH zone + strong hour = the A-setup</b>;
+       fresh zone in a weak hour = wait. 15m main, same as the stack. Same honesty rules: bounce = target ATR
+       before break, closed bars only, timeouts excluded, <b>low n</b> flagged. No signals, no alerts.</p>
+    <button class="copybtn" id="copyBtn5" style="border:1px solid rgba(251,146,60,.6); background:linear-gradient(92deg, rgba(251,146,60,.16), rgba(34,211,238,.12)); color:#ffedd5; text-shadow:0 0 14px rgba(251,146,60,.5)">📋 COPY CLOCK — 1 CLICK</button>
+    <div class="hint" id="hint5">copies the whole script to your clipboard, ready to paste</div>
+    <div class="meta"><span id="mchars5">…</span><span id="mlines5">…</span></div>
+    <pre class="src" id="src5"><span style="color:var(--muted)">loading source…</span></pre>
+  </div>
   </div>
 </div>
 
@@ -180,6 +202,8 @@
   wire('copyBtn2', 'hint2', 'src2', 'mchars2', 'mlines2', '/pine2',
        '✅ COPIED — NOW PASTE IT IN THE PINE EDITOR');
   wire('copyBtn4', 'hint4', 'src4', 'mchars4', 'mlines4', '/pine4',
+       '✅ COPIED — NOW PASTE IT IN THE PINE EDITOR');
+  wire('copyBtn5', 'hint5', 'src5', 'mchars5', 'mlines5', '/pine5',
        '✅ COPIED — NOW PASTE IT IN THE PINE EDITOR');
 })();
 </script>

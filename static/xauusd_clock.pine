@@ -1,0 +1,432 @@
+//@version=5
+// ============================================================================
+//  CLOCK  ·  TIME-OF-DAY PROOF  —  the desk's FIFTH indicator
+//
+//  PROOF answers WHICH zones deserve trust. CLOCK answers WHEN.
+//
+//  It replays your chart's own history, finds every zone the PROOF
+//  engine would have drawn, scores every touch — and attributes each
+//  outcome to the HOUR OF DAY (UTC) the touch happened in. The result
+//  is a measured map of when gold's zones actually hold:
+//
+//     London 08-12     71%  n=19
+//     NY 12-16         66%  n=22
+//     Late 20-24       33%  n=6 · low n
+//     best hour   09:00   worst hour  22:00
+//
+//  Plus a walk-forward HEAT TINT: every historical bar is shaded with
+//  the stats known up to that bar — the heat you would have seen then.
+//
+//  HONESTY RULES (same as PROOF):
+//     · a bounce counts ONLY if price travelled the target ATR in the
+//       rejection direction BEFORE the zone broke — closed bars only
+//     · timeouts are excluded and shown as excluded
+//     · small samples are flagged "low n" — never fake numbers
+//     · base rate: the same test on raw pivot levels, per session block
+//     · no repaint: zones born from confirmed pivots, outcomes on
+//       closed bars only, table drawn on the last bar only
+//
+//  No signals. No alerts. No drawings. Pure measured time-of-day stats.
+// ============================================================================
+indicator("CLOCK", overlay = true)
+
+// ---- inputs: detection (same defaults as PROOF so numbers compare) ------
+grpD = "Zone detection"
+kSwing   = input.int(3,     "Swing strength (bars each side) — 3 precise · 2 more zones", minval = 2, maxval = 10, group = grpD)
+impAtr   = input.float(1.8, "Impulse: min ATR multiple",  minval = 0.5, step = 0.1, group = grpD)
+zoneAtr  = input.float(2.0, "Max zone height (ATR)",      minval = 0.5, step = 0.1, group = grpD)
+slBuf    = input.float(0.15, "Break buffer beyond zone (ATR)", minval = 0.0, step = 0.05, group = grpD)
+maxZones  = input.int(30,   "Max zones tracked (oldest removed)", minval = 5, maxval = 60, group = grpD)
+maxAge    = input.int(500,  "Zone expiry (bars)",         minval = 50, maxval = 2000, group = grpD)
+
+// ---- inputs: measurement ----------------------------------------------------
+grpP = "Measurement"
+bounceR   = input.float(1.0, "Bounce target (ATR) — counts as HELD", minval = 0.25, step = 0.25, group = grpP)
+evalWindow = input.int(30,   "Evaluation window (bars)",  minval = 10, maxval = 100, group = grpP)
+minSample  = input.int(10,   "Low-sample flag below n",   minval = 5,  maxval = 30, group = grpP)
+
+// ---- inputs: display ----------------------------------------------------------
+grpV = "Display"
+showTable = input.bool(true, "Show session table", group = grpV)
+posOpt = input.string("Top Right", "Table position",
+     options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group = grpV)
+showHeat = input.bool(true, "Heat tint — shade bars by their hour's measured % (walk-forward)", group = grpV)
+
+// ---- basics ---------------------------------------------------------------------
+atr = ta.atr(14)
+hrU = hour(time, "UTC")
+
+// stats: per-hour zone outcomes (index 0-23, UTC hour of the TOUCH bar)
+var hw = array.new_int(24, 0)
+var hn = array.new_int(24, 0)
+// base rate: per 4-hour block, raw pivot levels (index 0-5, block of birth bar)
+var rw = array.new_int(6, 0)
+var rn = array.new_int(6, 0)
+var int exclN = 0
+
+f_pct(w, n) =>
+    n > 0 ? str.tostring(100.0 * w / n, "#") + "%" : "—"
+
+// ---- swings -----------------------------------------------------------------------
+ph = ta.pivothigh(high, kSwing, kSwing)
+pl = ta.pivotlow(low,  kSwing, kSwing)
+
+var loIdx = array.new_int(0)
+var loVal = array.new_float(0)
+var loAtr = array.new_float(0)
+var loTop = array.new_float(0)
+var loBot = array.new_float(0)
+var hiIdx = array.new_int(0)
+var hiVal = array.new_float(0)
+var hiAtr = array.new_float(0)
+var hiTop = array.new_float(0)
+var hiBot = array.new_float(0)
+
+// raw pivot levels for the base rate
+var bIdx   = array.new_int(0)
+var bLvl   = array.new_float(0)
+var bDir   = array.new_int(0)
+var bBirth = array.new_int(0)
+var bBlk   = array.new_int(0)
+
+// live zones (invisible — CLOCK is a stats panel, not a drawing tool)
+var zTop = array.new_float(0)
+var zBot = array.new_float(0)
+var zSide = array.new_int(0)
+var zTouches = array.new_int(0)
+var zCreated = array.new_int(0)
+var zIn = array.new_int(0)
+var eBirth = array.new_int(0)
+var eTarget = array.new_float(0)
+var eBreak = array.new_float(0)
+var eTHour = array.new_int(0)
+
+f_makeZone(sIdx, sTop, sBot, side) =>
+    if array.size(zTop) >= maxZones
+        array.remove(zTop, 0)
+        array.remove(zBot, 0)
+        array.remove(zSide, 0)
+        array.remove(zTouches, 0)
+        array.remove(zCreated, 0)
+        array.remove(zIn, 0)
+        array.remove(eBirth, 0)
+        array.remove(eTarget, 0)
+        array.remove(eBreak, 0)
+        array.remove(eTHour, 0)
+    array.push(zTop, sTop)
+    array.push(zBot, sBot)
+    array.push(zSide, side)
+    array.push(zTouches, 0)
+    array.push(zCreated, bar_index)
+    array.push(zIn, 0)
+    array.push(eBirth, -1)
+    array.push(eTarget, 0.0)
+    array.push(eBreak, 0.0)
+    array.push(eTHour, 0)
+
+// ---- pivot processing ---------------------------------------------------------------
+if not na(ph) and bar_index > kSwing + 2
+    pi = bar_index - kSwing
+    bTop = math.max(high[kSwing], math.max(high[kSwing + 1], high[kSwing + 2]))
+    bBot = math.min(low[kSwing],  math.min(low[kSwing + 1],  low[kSwing + 2]))
+    array.push(hiIdx, pi)
+    array.push(hiVal, ph)
+    array.push(hiAtr, atr[kSwing])
+    array.push(hiTop, bTop)
+    array.push(hiBot, bBot)
+    array.push(bIdx, pi)
+    array.push(bLvl, ph)
+    array.push(bDir, -1)
+    array.push(bBirth, bar_index)
+    array.push(bBlk, int(math.floor(hrU / 4.0)))
+    if array.size(loIdx) > 0
+        for i = array.size(loIdx) - 1 to 0
+            sIdx = array.get(loIdx, i)
+            sVal = array.get(loVal, i)
+            sAtr = array.get(loAtr, i)
+            sTop = array.get(loTop, i)
+            sBot = array.get(loBot, i)
+            impulse = ph - sVal
+            if pi - sIdx <= 48 and impulse >= impAtr * sAtr and sTop > sBot and sTop - sBot <= zoneAtr * sAtr
+                dup = false
+                if array.size(zTop) > 0
+                    for zi = 0 to array.size(zTop) - 1
+                        if array.get(zSide, zi) == 1 and bar_index - array.get(zCreated, zi) <= 24 and not (sBot > array.get(zTop, zi) or sTop < array.get(zBot, zi))
+                            dup := true
+                            break
+                if not dup
+                    f_makeZone(sIdx, sTop, sBot, 1)
+            array.remove(loIdx, i)
+            array.remove(loVal, i)
+            array.remove(loAtr, i)
+            array.remove(loTop, i)
+            array.remove(loBot, i)
+
+if not na(pl) and bar_index > kSwing + 2
+    pi = bar_index - kSwing
+    bTop = math.max(high[kSwing], math.max(high[kSwing + 1], high[kSwing + 2]))
+    bBot = math.min(low[kSwing],  math.min(low[kSwing + 1],  low[kSwing + 2]))
+    array.push(loIdx, pi)
+    array.push(loVal, pl)
+    array.push(loAtr, atr[kSwing])
+    array.push(loTop, bTop)
+    array.push(loBot, bBot)
+    array.push(bIdx, pi)
+    array.push(bLvl, pl)
+    array.push(bDir, 1)
+    array.push(bBirth, bar_index)
+    array.push(bBlk, int(math.floor(hrU / 4.0)))
+    if array.size(hiIdx) > 0
+        for i = array.size(hiIdx) - 1 to 0
+            sIdx = array.get(hiIdx, i)
+            sVal = array.get(hiVal, i)
+            sAtr = array.get(hiAtr, i)
+            sTop = array.get(hiTop, i)
+            sBot = array.get(hiBot, i)
+            impulse = sVal - pl
+            if pi - sIdx <= 48 and impulse >= impAtr * sAtr and sTop > sBot and sTop - sBot <= zoneAtr * sAtr
+                dup = false
+                if array.size(zTop) > 0
+                    for zi = 0 to array.size(zTop) - 1
+                        if array.get(zSide, zi) == -1 and bar_index - array.get(zCreated, zi) <= 24 and not (sBot > array.get(zTop, zi) or sTop < array.get(zBot, zi))
+                            dup := true
+                            break
+                if not dup
+                    f_makeZone(sIdx, sTop, sBot, -1)
+            array.remove(hiIdx, i)
+            array.remove(hiVal, i)
+            array.remove(hiAtr, i)
+            array.remove(hiTop, i)
+            array.remove(hiBot, i)
+
+// ---- CLOCK engine — CLOSED BARS ONLY (strict no-repaint) ------------------------------
+if barstate.isconfirmed
+    // 1) continue open zone evaluations — attribute to the TOUCH hour
+    if array.size(zTop) > 0
+        for zi = 0 to array.size(zTop) - 1
+            eb = array.get(eBirth, zi)
+            if eb >= 0 and bar_index > eb
+                s = array.get(zSide, zi)
+                res = false
+                isWin = false
+                if s == 1
+                    if low <= array.get(eBreak, zi)
+                        res := true
+                    else if high >= array.get(eTarget, zi)
+                        res := true
+                        isWin := true
+                else
+                    if high >= array.get(eBreak, zi)
+                        res := true
+                    else if low <= array.get(eTarget, zi)
+                        res := true
+                        isWin := true
+                if not res and bar_index - eb > evalWindow
+                    exclN += 1
+                    res := true
+                if res
+                    th = array.get(eTHour, zi)
+                    array.set(hn, th, array.get(hn, th) + 1)
+                    if isWin
+                        array.set(hw, th, array.get(hw, th) + 1)
+                    array.set(eBirth, zi, -1)
+
+    // 2) raw pivot-level base rate, per 4-hour block
+    if array.size(bIdx) > 0
+        for i = array.size(bIdx) - 1 to 0
+            bdir = array.get(bDir, i)
+            lvl = array.get(bLvl, i)
+            born = array.get(bBirth, i)
+            if bar_index > born
+                oc = 0
+                if bdir == 1
+                    if low < lvl - slBuf * atr
+                        oc := 2
+                    else if high >= lvl + bounceR * atr
+                        oc := 1
+                else
+                    if high > lvl + slBuf * atr
+                        oc := 2
+                    else if low <= lvl - bounceR * atr
+                        oc := 1
+                if oc == 0 and bar_index - born > evalWindow
+                    oc := 3
+                if oc == 1 or oc == 2
+                    bb = array.get(bBlk, i)
+                    array.set(rn, bb, array.get(rn, bb) + 1)
+                    if oc == 1
+                        array.set(rw, bb, array.get(rw, bb) + 1)
+                else if oc == 3
+                    exclN += 1
+                if oc != 0
+                    array.remove(bIdx, i)
+                    array.remove(bLvl, i)
+                    array.remove(bDir, i)
+                    array.remove(bBirth, i)
+                    array.remove(bBlk, i)
+        if array.size(bIdx) > 200
+            for i = 0 to array.size(bIdx) - 201
+                array.remove(bIdx, 0)
+                array.remove(bLvl, 0)
+                array.remove(bDir, 0)
+                array.remove(bBirth, 0)
+                array.remove(bBlk, 0)
+
+    // 3) touch detection + evaluation start (hour of the touch bar)
+    if array.size(zTop) > 0
+        for zi = 0 to array.size(zTop) - 1
+            s = array.get(zSide, zi)
+            zt = array.get(zTop, zi)
+            zb = array.get(zBot, zi)
+            touching = s == 1 ? (low <= zt and close >= zb) : (high >= zb and close <= zt)
+            if touching and array.get(zIn, zi) == 0
+                tN = array.get(zTouches, zi) + 1
+                array.set(zTouches, zi, tN)
+                brokenNow = s == 1 ? low < zb - slBuf * atr : high > zt + slBuf * atr
+                if not brokenNow
+                    array.set(eBirth, zi, bar_index)
+                    array.set(eTarget, zi, s == 1 ? zt + bounceR * atr : zb - bounceR * atr)
+                    array.set(eBreak, zi, s == 1 ? zb - slBuf * atr : zt + slBuf * atr)
+                    array.set(eTHour, zi, hrU)
+            array.set(zIn, zi, touching ? 1 : 0)
+
+    // 4) break / age deletion
+    if array.size(zTop) > 0
+        for zi = array.size(zTop) - 1 to 0
+            s = array.get(zSide, zi)
+            zt = array.get(zTop, zi)
+            zb = array.get(zBot, zi)
+            old = bar_index - array.get(zCreated, zi)
+            broken = s == 1 ? low < zb - slBuf * atr : high > zt + slBuf * atr
+            if broken or old > maxAge
+                if array.get(eBirth, zi) >= 0
+                    exclN += 1
+                array.remove(zTop, zi)
+                array.remove(zBot, zi)
+                array.remove(zSide, zi)
+                array.remove(zTouches, zi)
+                array.remove(zCreated, zi)
+                array.remove(zIn, zi)
+                array.remove(eBirth, zi)
+                array.remove(eTarget, zi)
+                array.remove(eBreak, zi)
+                array.remove(eTHour, zi)
+
+// ---- heat tint — walk-forward: each bar shaded with the stats known up to it ----------
+f_heatColor() =>
+    color c = na
+    n = array.get(hn, hrU)
+    if n >= minSample
+        pct = 100.0 * array.get(hw, hrU) / n
+        if pct >= 60
+            c := color.new(color.green, 88)
+        else if pct <= 40
+            c := color.new(color.red, 88)
+        else
+            c := color.new(color.gray, 94)
+    c
+bgcolor(showHeat and barstate.isconfirmed ? f_heatColor() : na)
+
+// ---- pruning of unpaired pivots -----------------------------------------------------
+if array.size(loIdx) > 0
+    for i = array.size(loIdx) - 1 to 0
+        if bar_index - array.get(loIdx, i) > 200
+            array.remove(loIdx, i)
+            array.remove(loVal, i)
+            array.remove(loAtr, i)
+            array.remove(loTop, i)
+            array.remove(loBot, i)
+if array.size(hiIdx) > 0
+    for i = array.size(hiIdx) - 1 to 0
+        if bar_index - array.get(hiIdx, i) > 200
+            array.remove(hiIdx, i)
+            array.remove(hiVal, i)
+            array.remove(hiAtr, i)
+            array.remove(hiTop, i)
+            array.remove(hiBot, i)
+
+// ---- session table — last bar only (overwrite-only, no merges/clears) ------------------
+f_blkName(b) =>
+    b == 0 ? "Asia 00-04" : b == 1 ? "Asia 04-08" : b == 2 ? "London 08-12" : b == 3 ? "NY 12-16" : b == 4 ? "NY pm 16-20" : "Late 20-24"
+
+var table tb = na
+if showTable and barstate.islast
+    if na(tb)
+        posMap = posOpt == "Top Right" ? position.top_right : posOpt == "Top Left" ? position.top_left : posOpt == "Bottom Right" ? position.bottom_right : position.bottom_left
+        tb := table.new(posMap, 3, 12, bgcolor = color.new(#0a0e17, 15), border_width = 1, border_color = color.new(color.gray, 72))
+    hdr = color.new(color.gray, 62)
+    table.cell(tb, 0, 0, "CLOCK", text_color = color.new(color.white, 8), text_size = size.small, bgcolor = hdr)
+    table.cell(tb, 1, 0, "zone bounce by hour (UTC)", text_color = color.new(color.white, 8), text_size = size.small, bgcolor = hdr)
+    table.cell(tb, 2, 0, "this chart's own history", text_color = color.new(color.white, 8), text_size = size.small, bgcolor = hdr)
+    for b = 0 to 5
+        bw = 0
+        bn = 0
+        for h = b * 4 to b * 4 + 3
+            bw += array.get(hw, h)
+            bn += array.get(hn, h)
+        pctTxt = f_pct(bw, bn)
+        nTxt = "n=" + str.tostring(bn)
+        if bn > 0 and bn < minSample
+            nTxt += " · low n"
+        col = color.new(color.white, 20)
+        if bn >= minSample
+            if 100.0 * bw / bn >= 60
+                col := color.new(color.green, 10)
+            else if 100.0 * bw / bn <= 40
+                col := color.new(color.red, 10)
+        table.cell(tb, 0, b + 1, f_blkName(b), text_color = color.new(color.white, 25), text_size = size.tiny)
+        table.cell(tb, 1, b + 1, pctTxt, text_color = col, text_size = size.tiny)
+        table.cell(tb, 2, b + 1, nTxt, text_color = color.new(color.gray, 30), text_size = size.tiny)
+    // best and worst hour (only hours with n > 0)
+    int bestH = -1
+    int worstH = -1
+    for h = 0 to 23
+        if array.get(hn, h) > 0
+            if bestH < 0
+                bestH := h
+                worstH := h
+            else
+                if 100.0 * array.get(hw, h) / array.get(hn, h) >= 100.0 * array.get(hw, bestH) / array.get(hn, bestH)
+                    bestH := h
+                if 100.0 * array.get(hw, h) / array.get(hn, h) <= 100.0 * array.get(hw, worstH) / array.get(hn, worstH)
+                    worstH := h
+    string bestTxt = "—"
+    string bestN = ""
+    string worstTxt = "—"
+    string worstN = ""
+    if bestH >= 0
+        bestTxt := (bestH < 10 ? "0" : "") + str.tostring(bestH) + ":00 · " + f_pct(array.get(hw, bestH), array.get(hn, bestH))
+        bestN := "n=" + str.tostring(array.get(hn, bestH))
+        if array.get(hn, bestH) < minSample
+            bestN += " · low n"
+    if worstH >= 0
+        worstTxt := (worstH < 10 ? "0" : "") + str.tostring(worstH) + ":00 · " + f_pct(array.get(hw, worstH), array.get(hn, worstH))
+        worstN := "n=" + str.tostring(array.get(hn, worstH))
+        if array.get(hn, worstH) < minSample
+            worstN += " · low n"
+    table.cell(tb, 0, 7, "best hour", text_color = color.new(color.green, 10), text_size = size.tiny)
+    table.cell(tb, 1, 7, bestTxt, text_color = color.new(color.white, 20), text_size = size.tiny)
+    table.cell(tb, 2, 7, bestN, text_color = color.new(color.gray, 30), text_size = size.tiny)
+    table.cell(tb, 0, 8, "worst hour", text_color = color.new(color.red, 10), text_size = size.tiny)
+    table.cell(tb, 1, 8, worstTxt, text_color = color.new(color.white, 20), text_size = size.tiny)
+    table.cell(tb, 2, 8, worstN, text_color = color.new(color.gray, 30), text_size = size.tiny)
+    // overall zone % vs raw base rate
+    tow = 0
+    ton = 0
+    for h = 0 to 23
+        tow += array.get(hw, h)
+        ton += array.get(hn, h)
+    trw = 0
+    trn = 0
+    for b = 0 to 5
+        trw += array.get(rw, b)
+        trn += array.get(rn, b)
+    table.cell(tb, 0, 9, "zone overall", text_color = color.new(color.white, 25), text_size = size.tiny)
+    table.cell(tb, 1, 9, f_pct(tow, ton), text_color = color.new(color.white, 20), text_size = size.tiny)
+    table.cell(tb, 2, 9, "n=" + str.tostring(ton), text_color = color.new(color.gray, 30), text_size = size.tiny)
+    table.cell(tb, 0, 10, "raw pivot levels", text_color = color.new(color.gray, 20), text_size = size.tiny)
+    table.cell(tb, 1, 10, f_pct(trw, trn), text_color = color.new(color.gray, 10), text_size = size.tiny)
+    table.cell(tb, 2, 10, "n=" + str.tostring(trn), text_color = color.new(color.gray, 30), text_size = size.tiny)
+    table.cell(tb, 0, 11, "bounce " + str.tostring(bounceR, "#.##") + " ATR", text_color = color.new(color.gray, 35), text_size = size.tiny)
+    table.cell(tb, 1, 11, str.tostring(evalWindow) + " bars · excl " + str.tostring(exclN), text_color = color.new(color.gray, 35), text_size = size.tiny)
+    table.cell(tb, 2, 11, "heat: green ≥60% red ≤40%", text_color = color.new(color.gray, 35), text_size = size.tiny)

@@ -78,8 +78,19 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "10.24"
+SYSTEM_VERSION = "10.25"
 SYSTEM_CHANGELOG = {
+    "10.25": [
+        "FIFTH TradingView indicator: CLOCK [Time-of-Day Proof] \u2014 "
+        "PROOF's zone engine scored by hour of day: session table "
+        "(Asia / London / NY blocks), best & worst hour, zone overall "
+        "vs raw-level base rate, and a walk-forward heat tint shading "
+        "every bar with its hour's measured bounce %. Same honesty "
+        "rules as PROOF (closed bars, timeouts excluded, low-n flags, "
+        "no repaint). No signals, no alerts. Served at /pine5 with a "
+        "third one-click-copy card on the website; all five indicator "
+        "sources reposted to the INDICATOR topic",
+    ],
     "10.24": [
         "Desk dashboard top bar renamed to RENDER (was 'XAUUSD SNR "
         "DESK') \u2014 the whole site now carries the RENDER name: "
@@ -4537,7 +4548,28 @@ def _announce_indicator():
         "No signals, no alerts. It upgrades \u2116 1-3: run it beside them "
         "and see which zones deserve your trust.\n"
         "One-click copy: the website front page.")
-    total = n1 + n2 + n3 + n4
+    time.sleep(1.5)
+    # indicator #5 — CLOCK: time-of-day proof
+    n5 = _post_indicator_source(
+        "static/xauusd_clock.pine",
+        "\U0001F550 CLOCK \u2014 [Time-of-Day Proof]\n\n"
+        "PROOF answers WHICH zones deserve trust. CLOCK answers WHEN.\n"
+        "It replays your chart's own history, finds every zone the PROOF "
+        "engine would draw, and scores every touch by the HOUR OF DAY "
+        "(UTC) it happened in:\n"
+        "\u2022 session table \u2014 Asia 00-04 / 04-08, London 08-12, NY "
+        "12-16 / 16-20, Late 20-24: measured bounce % + n\n"
+        "\u2022 best hour & worst hour \u2014 named, with sample size\n"
+        "\u2022 zone overall vs raw pivot levels (base rate)\n"
+        "\u2022 heat tint \u2014 every bar shaded with its hour's measured "
+        "% (walk-forward: the heat you would have seen then)\n\n"
+        "Same honesty rules as PROOF: a bounce counts only if price "
+        "travelled 1\u00d7ATR before the zone broke \u2014 closed bars "
+        "only, timeouts excluded, low samples flagged, no repaint. No "
+        "signals, no alerts.\n"
+        "Stack with PROOF: FRESH zone + strong hour = the A-setup.\n"
+        "One-click copy: the website front page.")
+    total = n1 + n2 + n3 + n4 + n5
     if total:
         _tg_post_topic(
             "\U0001F4E6 HOW TO TRADE THE ZONE BOXES (FLOW indicator)\n\n"
@@ -4562,8 +4594,9 @@ def _announce_indicator():
             _tg_topics().get("indicator"))
         time.sleep(1.5)
         _tg_post_topic(
-            "\u2705 All four indicator sources posted. The website "
-            "(RENDER INDICATOR) shows FLOW15mn and PROOF with one-click "
+            "\u2705 All five indicator sources posted \u2014 CLOCK is "
+            "the new one: time-of-day proof. The website (RENDER "
+            "INDICATOR) shows FLOW15mn, PROOF and CLOCK with one-click "
             "copy \u2014 A+ SNIPER and FRT stay here in the topic. Red "
             "error in the Pine Editor? Message "
             "the group. Not financial advice \u2014 every signal is scored "
@@ -4573,7 +4606,7 @@ def _announce_indicator():
         STATE["lastIndicatorPost"] = dict(t=int(time.time()),
                                           parts=total, sent=total)
         _save_state()
-    print(f"[desk] posted all 4 indicators to INDICATOR topic "
+    print(f"[desk] posted all 5 indicators to INDICATOR topic "
           f"({total} parts)", flush=True)
     return total
 
@@ -5695,6 +5728,19 @@ def pine_proof():
     try:
         with open(os.path.join(app.root_path, "static",
                                "xauusd_proof.pine")) as f:
+            txt = f.read()
+        return Response(txt, mimetype="text/plain")
+    except Exception:  # noqa: BLE001
+        return Response("-- indicator file missing --", mimetype="text/plain")
+
+
+@app.route("/pine5")
+def pine_clock():
+    """Indicator #5 — CLOCK [Time-of-Day Proof]: PROOF's zone engine
+    scored by hour of day, on the user's own chart."""
+    try:
+        with open(os.path.join(app.root_path, "static",
+                               "xauusd_clock.pine")) as f:
             txt = f.read()
         return Response(txt, mimetype="text/plain")
     except Exception:  # noqa: BLE001

@@ -78,8 +78,15 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "10.26"
+SYSTEM_VERSION = "10.27"
 SYSTEM_CHANGELOG = {
+    "10.27": [
+        "RENDER runtime fix: the consensus level collector crashed on "
+        "bar 0 ('Index -1, array size 0') \u2014 Pine evaluates BOTH "
+        "sides of 'or', so the empty-array check still ran the array "
+        "read. Collector rewritten with guarded reads. Members: re-copy "
+        "RENDER from the website or the FIXED parts in the topic",
+    ],
     "10.26": [
         "SIXTH TradingView indicator: RENDER \u2014 the complete system, "
         "an all-in-one that combines PROOF (self-proving zones + road "

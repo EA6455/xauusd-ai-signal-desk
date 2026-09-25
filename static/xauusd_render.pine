@@ -168,10 +168,16 @@ var htfHi2 = array.new_float(0)
 var htfLo2 = array.new_float(0)
 
 f_collect(arr, v) =>
-    if not na(v) and (array.size(arr) == 0 or math.abs(array.get(arr, array.size(arr) - 1) - v) > syminfo.mintick)
-        array.push(arr, v)
-        if array.size(arr) > 8
-            array.remove(arr, 0)
+    // NOTE: Pine evaluates BOTH sides of 'and'/'or'/'?' — the size check
+    // and the array read must be separate statements, never one expression
+    if not na(v)
+        bool sameAsLast = false
+        if array.size(arr) > 0
+            sameAsLast := math.abs(array.get(arr, array.size(arr) - 1) - v) <= syminfo.mintick
+        if not sameAsLast
+            array.push(arr, v)
+            if array.size(arr) > 8
+                array.remove(arr, 0)
 
 f_htfAgree(arr, zt, zb) =>
     bool a = false

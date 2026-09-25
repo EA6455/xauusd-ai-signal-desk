@@ -24,7 +24,14 @@
 //    SETUPS: when a signal appears, a clean LADDER of horizontal
 //    lines — TP on top, BUY (or SELL) in the middle, SL below (for
 //    shorts the order flips: SL / SELL / TP) — each labeled with its
-//    price. TP2 stays in the panel. Max 4 ladders on chart.
+//    price. TP2 stays in the panel. Only the LATEST ladder is kept
+//    (an old one is replaced the moment a new signal fires) and it
+//    floats RIGHT OF LIVE PRICE — on time, never in the past. The
+//    BUY/SELL chip is a small solid text box. No triangles, no
+//    diamonds, no other markers — the chart stays clean.
+//    HIGH-VALIDITY ONLY: every setup must pass a strength gate —
+//    signal candle body >= 35% of its range, EMA separation >= 0.08
+//    ATR (a real trend, not chop) and risk <= 1.0 ATR (tight stops).
 //    ALERTS + SIGNALS fire in the THREE SESSIONS ONLY:
 //    Asia 00-08 · London 07-16 · NY 12-21 UTC — blocked 21:00-00:00.
 //    NO SPAM: cooldown between entries (default 8 bars).
@@ -32,7 +39,7 @@
 //    the swing projected by DATA: half the average of the last
 //    completed ghost bodies (min 0.15 ATR), in the live swing's
 //    direction.
-//    Simple ▲▼ markers + ◆ flip diamonds also shown.
+//    Flip alerts still fire — nothing extra is drawn for them.
 //    Alerts: FLOW LONG / FLOW SHORT / FLOW turned UP / DOWN.
 //
 //  HONESTY: this is a NEW trend-following engine. The desk's measured
@@ -68,6 +75,10 @@ confirmEma = input.bool(false, "Stricter entry: close must also be beyond the fa
 slBuf   = input.float(0.15, "Stop buffer beyond swing (ATR)", minval = 0.0, step = 0.05, group = grpF)
 tp1R    = input.float(0.75, "TP1 (R) — half off", minval = 0.1, step = 0.05, group = grpF)
 tp2R    = input.float(1.5,  "TP2 (R) — runner",   minval = 0.2, step = 0.05, group = grpF)
+validOnly = input.bool(true, "High-validity setups only (strong candle · real trend · tight risk)", group = grpF)
+validBody = input.float(0.35, "Min signal-candle body / range", minval = 0.1, maxval = 0.9, step = 0.05, group = grpF)
+validSep = input.float(0.08, "Min EMA separation (ATR) — real trend, no chop", minval = 0.0, maxval = 1.0, step = 0.01, group = grpF)
+maxRiskAtr = input.float(1.0, "Max risk per setup (ATR) — tight stops only", minval = 0.3, maxval = 3.0, step = 0.1, group = grpF)
 
 // ---- inputs: display ----------------------------------------------------------------
 grpV = "Display"
@@ -192,12 +203,16 @@ else
     predBody := box(na)
 
 // ---- flow signal engine — CLOSED BARS ONLY (strict no-repaint) ------------------------------
-var lTP = array.new_line(0)
-var lE = array.new_line(0)
-var lSL = array.new_line(0)
-var lbTP = array.new_label(0)
-var lbE = array.new_label(0)
-var lbSL = array.new_label(0)
+var float ladEp = na
+var float ladSLp = na
+var float ladTPp = na
+var bool ladLong = true
+var line ladTP = na
+var line ladE = na
+var line ladSL = na
+var label ladLbTP = na
+var label ladLbE = na
+var label ladLbSL = na
 var int sigN = 0
 var int lastLongBar = -1000
 var int lastShortBar = -1000
@@ -226,9 +241,6 @@ if barstate.isconfirmed
     wasDn := flowDn
     // LONG: big flow up + pullback touched the slow EMA zone + momentum resumption
     if showSignals and flowUp and pullLo < emaS and turnUp and (not confirmEma or close > emaF) and bar_index - lastLongBar > coolBars and not sessDead
-        sigLong := true
-        sigN += 1
-        lastLongBar := bar_index
         entryP = close
         slP = pullLo - slBuf * atr
         riskP = entryP - slP
@@ -237,36 +249,22 @@ if barstate.isconfirmed
             slP := entryP - riskP
         tp1P = entryP + tp1R * riskP
         tp2P = entryP + tp2R * riskP
-        lastDir := 1
-        lastE := entryP
-        lastSL := slP
-        lastTP1 := tp1P
-        lastTP2 := tp2P
-        if array.size(lE) >= 4
-            line.delete(array.get(lTP, 0))
-            line.delete(array.get(lE, 0))
-            line.delete(array.get(lSL, 0))
-            label.delete(array.get(lbTP, 0))
-            label.delete(array.get(lbE, 0))
-            label.delete(array.get(lbSL, 0))
-            array.remove(lTP, 0)
-            array.remove(lE, 0)
-            array.remove(lSL, 0)
-            array.remove(lbTP, 0)
-            array.remove(lbE, 0)
-            array.remove(lbSL, 0)
-        le = bar_index + 28
-        array.push(lTP, line.new(bar_index, tp1P, le, tp1P, color = color.new(color.green, 30), width = 1))
-        array.push(lE, line.new(bar_index, entryP, le, entryP, color = color.new(ghostUp, 0), width = 2))
-        array.push(lSL, line.new(bar_index, slP, le, slP, color = color.new(color.red, 0), width = 1, style = line.style_dashed))
-        array.push(lbTP, label.new(le + 1, tp1P, "TP " + str.tostring(tp1P, "#.##"), style = label.style_label_left, color = color.new(color.black, 100), textcolor = color.new(color.green, 15), size = size.tiny))
-        array.push(lbE, label.new(le + 1, entryP, "BUY " + str.tostring(entryP, "#.##"), style = label.style_label_left, color = color.new(color.black, 100), textcolor = color.new(ghostUp, 5), size = size.tiny))
-        array.push(lbSL, label.new(le + 1, slP, "SL " + str.tostring(slP, "#.##"), style = label.style_label_left, color = color.new(color.black, 100), textcolor = color.new(color.red, 15), size = size.tiny))
+        // high-validity gate: strong resumption candle · real trend · tight risk
+        if not validOnly or (math.abs(close - open) >= validBody * (high - low) and math.abs(emaF - emaS) >= validSep * atr and riskP <= maxRiskAtr * atr)
+            sigLong := true
+            sigN += 1
+            lastLongBar := bar_index
+            lastDir := 1
+            lastE := entryP
+            lastSL := slP
+            lastTP1 := tp1P
+            lastTP2 := tp2P
+            ladEp := entryP
+            ladSLp := slP
+            ladTPp := tp1P
+            ladLong := true
     // SHORT: big flow down + pullback touched the slow EMA zone + momentum resumption down
     if showSignals and flowDn and pullHi > emaS and turnDn and (not confirmEma or close < emaF) and bar_index - lastShortBar > coolBars and not sessDead
-        sigShort := true
-        sigN += 1
-        lastShortBar := bar_index
         entryP = close
         slP = pullHi + slBuf * atr
         riskP = slP - entryP
@@ -275,38 +273,48 @@ if barstate.isconfirmed
             slP := entryP + riskP
         tp1P = entryP - tp1R * riskP
         tp2P = entryP - tp2R * riskP
-        lastDir := -1
-        lastE := entryP
-        lastSL := slP
-        lastTP1 := tp1P
-        lastTP2 := tp2P
-        if array.size(lE) >= 4
-            line.delete(array.get(lTP, 0))
-            line.delete(array.get(lE, 0))
-            line.delete(array.get(lSL, 0))
-            label.delete(array.get(lbTP, 0))
-            label.delete(array.get(lbE, 0))
-            label.delete(array.get(lbSL, 0))
-            array.remove(lTP, 0)
-            array.remove(lE, 0)
-            array.remove(lSL, 0)
-            array.remove(lbTP, 0)
-            array.remove(lbE, 0)
-            array.remove(lbSL, 0)
-        le = bar_index + 28
-        array.push(lSL, line.new(bar_index, slP, le, slP, color = color.new(color.red, 0), width = 1, style = line.style_dashed))
-        array.push(lE, line.new(bar_index, entryP, le, entryP, color = color.new(ghostDn, 0), width = 2))
-        array.push(lTP, line.new(bar_index, tp1P, le, tp1P, color = color.new(color.green, 30), width = 1))
-        array.push(lbSL, label.new(le + 1, slP, "SL " + str.tostring(slP, "#.##"), style = label.style_label_left, color = color.new(color.black, 100), textcolor = color.new(color.red, 15), size = size.tiny))
-        array.push(lbE, label.new(le + 1, entryP, "SELL " + str.tostring(entryP, "#.##"), style = label.style_label_left, color = color.new(color.black, 100), textcolor = color.new(ghostDn, 5), size = size.tiny))
-        array.push(lbTP, label.new(le + 1, tp1P, "TP " + str.tostring(tp1P, "#.##"), style = label.style_label_left, color = color.new(color.black, 100), textcolor = color.new(color.green, 15), size = size.tiny))
+        // high-validity gate: strong resumption candle · real trend · tight risk
+        if not validOnly or (math.abs(close - open) >= validBody * (high - low) and math.abs(emaF - emaS) >= validSep * atr and riskP <= maxRiskAtr * atr)
+            sigShort := true
+            sigN += 1
+            lastShortBar := bar_index
+            lastDir := -1
+            lastE := entryP
+            lastSL := slP
+            lastTP1 := tp1P
+            lastTP2 := tp2P
+            ladEp := entryP
+            ladSLp := slP
+            ladTPp := tp1P
+            ladLong := false
 
-// ---- plots + alerts ------------------------------------------------------------------------------
-plotshape(sigLong,  style = shape.triangleup,   location = location.belowbar, color = color.new(#14b8a6, 0), size = size.small, title = "FLOW LONG")
-plotshape(sigShort, style = shape.triangledown, location = location.abovebar, color = color.new(#f43f5e, 0), size = size.small, title = "FLOW SHORT")
-plotshape(flipUp,   style = shape.diamond,      location = location.belowbar, color = color.new(#22d3ee, 0), size = size.tiny,  title = "FLOW turned UP")
-plotshape(flipDn,   style = shape.diamond,      location = location.abovebar, color = color.new(#22d3ee, 0), size = size.tiny,  title = "FLOW turned DOWN")
+// ---- the ladder: LATEST setup only, floating right of live price (on time, never in the past) ----
+if not na(ladEp)
+    if na(ladE)
+        ladTP := line.new(bar_index + 1, ladTPp, bar_index + 29, ladTPp, color = color.new(color.green, 30), width = 1)
+        ladE := line.new(bar_index + 1, ladEp, bar_index + 29, ladEp, width = 2)
+        ladSL := line.new(bar_index + 1, ladSLp, bar_index + 29, ladSLp, color = color.new(color.red, 0), width = 1, style = line.style_dashed)
+        ladLbTP := label.new(bar_index + 30, ladTPp, "TP", style = label.style_label_left, color = color.new(color.black, 100), textcolor = color.new(color.green, 15), size = size.tiny)
+        ladLbE := label.new(bar_index + 30, ladEp, "BUY", style = label.style_label_left, color = color.new(ghostUp, 25), textcolor = color.white, size = size.tiny)
+        ladLbSL := label.new(bar_index + 30, ladSLp, "SL", style = label.style_label_left, color = color.new(color.black, 100), textcolor = color.new(color.red, 15), size = size.tiny)
+    lc = ladLong ? ghostUp : ghostDn
+    line.set_xy1(ladTP, bar_index + 1, ladTPp)
+    line.set_xy2(ladTP, bar_index + 29, ladTPp)
+    line.set_xy1(ladE, bar_index + 1, ladEp)
+    line.set_xy2(ladE, bar_index + 29, ladEp)
+    line.set_color(ladE, lc)
+    line.set_xy1(ladSL, bar_index + 1, ladSLp)
+    line.set_xy2(ladSL, bar_index + 29, ladSLp)
+    label.set_xy(ladLbTP, bar_index + 30, ladTPp)
+    label.set_text(ladLbTP, "TP " + str.tostring(ladTPp, "#.##"))
+    label.set_xy(ladLbE, bar_index + 30, ladEp)
+    label.set_text(ladLbE, (ladLong ? "BUY " : "SELL ") + str.tostring(ladEp, "#.##"))
+    label.set_color(ladLbE, color.new(lc, 25))
+    label.set_textcolor(ladLbE, color.white)
+    label.set_xy(ladLbSL, bar_index + 30, ladSLp)
+    label.set_text(ladLbSL, "SL " + str.tostring(ladSLp, "#.##"))
 
+// ---- alerts ------------------------------------------------------------------------------
 alertcondition(sigLong,  "FLOW LONG setup",  "GHOST: FLOW LONG — 1H+4H up, pullback resumption confirmed. Entry, SL and TPs drawn on chart")
 alertcondition(sigShort, "FLOW SHORT setup", "GHOST: FLOW SHORT — 1H+4H down, pullback resumption confirmed. Entry, SL and TPs drawn on chart")
 alertcondition(flipUp,   "FLOW turned UP",   "GHOST: the big flow just turned UP — 1H and 4H now agree bullish")
@@ -335,7 +343,7 @@ if showPanel and barstate.islast
     table.cell(tb, 2, 2, ghostTf + (showLive ? " · live on" : "") + (showPredict ? " · predict" : "") + " · " + ghostMode, text_color = color.new(color.gray, 30), text_size = size.tiny)
     table.cell(tb, 0, 3, "signals fired", text_color = color.new(color.white, 25), text_size = size.tiny)
     table.cell(tb, 1, 3, str.tostring(sigN), text_color = color.new(color.white, 20), text_size = size.tiny)
-    table.cell(tb, 2, 3, "TP/BUY/SL ladder setups", text_color = color.new(color.gray, 30), text_size = size.tiny)
+    table.cell(tb, 2, 3, "latest ladder · high-validity only", text_color = color.new(color.gray, 30), text_size = size.tiny)
     string lsDir = lastDir == 1 ? "▲ LONG" : lastDir == -1 ? "▼ SHORT" : "—"
     string lsE = lastDir == 0 ? "" : "E " + str.tostring(lastE, "#.##")
     string lsRest = lastDir == 0 ? "" : "SL " + str.tostring(lastSL, "#.##") + " · TP " + str.tostring(lastTP1, "#.##") + " / " + str.tostring(lastTP2, "#.##")

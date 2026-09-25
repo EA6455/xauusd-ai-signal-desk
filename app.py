@@ -78,8 +78,18 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "10.36"
+SYSTEM_VERSION = "10.37"
 SYSTEM_CHANGELOG = {
+    "10.37": [
+        "GHOST v7 \u2014 latest-ladder-only setups: old ladders are "
+        "removed the moment a new signal fires, and the ladder floats "
+        "RIGHT OF LIVE PRICE (on time, never drawn in the past). "
+        "Triangles and diamonds are gone \u2014 the signal is now a "
+        "small solid BUY/SELL text box. New HIGH-VALIDITY gate: "
+        "strong signal candle (body \u2265 35% of range), real trend "
+        "(EMA separation \u2265 0.08 ATR), tight risk (\u2264 1 ATR). "
+        "Members: re-copy GHOST",
+    ],
     "10.36": [
         "GHOST v6 hotfix: the pHeights array was declared after its "
         "first use in the ghost engine \u2014 Pine compile error "

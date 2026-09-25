@@ -4,18 +4,23 @@
 //
 //  Buy/sell that trades WITH the big flow, plus the ghosts that show it:
 //
-//  · GHOST CANDLES — the higher timeframe's candles (default 1H) drawn
+//  · GHOST CANDLES — the higher timeframe's candles drawn
 //    translucently BEHIND your chart: soft teal bodies for up candles,
 //    soft rose for down, wick at the center. The forming candle glows
 //    slightly brighter so you always see the flow you are trading.
+//    AUTO mode adapts the ghost TF to ANY chart — including 1m:
+//    1m chart -> 15m ghosts · 5m -> 30m · 15m -> 1H · 30m/1H -> 4H ·
+//    4H/D -> daily ghosts. Manual override in settings.
 //    Completed ghosts never repaint; the live ghost updates in real time.
 //
 //  · FLOW SIGNALS — longs ONLY when 1H and 4H trends agree UP, shorts
 //    ONLY when both agree DOWN (confirmed HTF bars, no lookahead).
 //    Entry = momentum resumption after a pullback: price dips to the
 //    slow EMA, then closes back through the fast EMA in the flow's
-//    direction. Every signal draws the full trade: entry, SL beyond
-//    the recent swing, TP1 0.75R / TP2 1.5R + profit/risk zones.
+//    direction. Every signal draws the full trade with TRENDLINE
+//    ENTRIES — no boxes: a trendline anchored at the pullback extreme
+//    through the entry, extended right (break of it = momentum gone),
+//    plus SL beyond the recent swing and TP1 0.75R / TP2 1.5R levels.
 //    Alerts: FLOW LONG / FLOW SHORT / FLOW turned UP / DOWN.
 //
 //  HONESTY: this is a NEW trend-following engine. The desk's measured
@@ -31,7 +36,9 @@ indicator("GHOST", overlay = true,
 
 // ---- inputs: ghost candles -----------------------------------------------------
 grpG = "Ghost candles (the big flow, made visible)"
-htfTf     = input.timeframe("60", "Ghost timeframe (drawn behind your chart)", group = grpG)
+ghostMode = input.string("Auto", "Ghost timeframe mode",
+     options = ["Auto", "Manual"], group = grpG)
+htfTf     = input.timeframe("60", "Ghost timeframe (Manual mode — ignored in Auto)", group = grpG)
 showLive  = input.bool(true, "Show the forming candle (slightly brighter)", group = grpG)
 maxGhosts = input.int(80, "Max ghost candles on chart", minval = 20, maxval = 200, group = grpG)
 ghostUp   = input.color(#14b8a6, "Ghost up color",  group = grpG)
@@ -76,14 +83,20 @@ t4 = na(fE9) or na(fE21) ? 0 : fE9 > fE21 and fC > fE21 ? 1 : fE9 < fE21 and fC 
 flowUp = t1 == 1 and t4 == 1
 flowDn = t1 == -1 and t4 == -1
 
+// ---- ghost timeframe: auto-adapts to the chart (1m chart -> 15m ghosts) --------------------
+f_autoGhostTf() =>
+    p = timeframe.period
+    p == "1" ? "15" : p == "5" ? "30" : p == "15" ? "60" : p == "30" ? "240" : p == "60" ? "240" : p == "240" or p == "D" ? "D" : "60"
+ghostTf = ghostMode == "Auto" ? f_autoGhostTf() : htfTf
+
 // ---- ghost candle data: completed [1] + live forming --------------------------------------
-[gO, gH, gL, gC] = request.security(syminfo.tickerid, htfTf,
+[gO, gH, gL, gC] = request.security(syminfo.tickerid, ghostTf,
      [open[1], high[1], low[1], close[1]],
      lookahead = barmerge.lookahead_on)
-[vO, vH, vL, vC] = request.security(syminfo.tickerid, htfTf,
+[vO, vH, vL, vC] = request.security(syminfo.tickerid, ghostTf,
      [open, high, low, close],
      lookahead = barmerge.lookahead_on)
-newG = ta.change(time(htfTf)) != 0
+newG = ta.change(time(ghostTf)) != 0
 
 var int gStart = na
 var gBodies = array.new_box(0)
@@ -133,12 +146,10 @@ if not showLive
     liveWick := line(na)
 
 // ---- flow signal engine — CLOSED BARS ONLY (strict no-repaint) ------------------------------
-var tEntry = array.new_line(0)
+var tTrend = array.new_line(0)
 var tSL = array.new_line(0)
 var tTP1 = array.new_line(0)
 var tTP2 = array.new_line(0)
-var tPBox = array.new_box(0)
-var tRBox = array.new_box(0)
 var sigLbls = array.new_label(0)
 var int sigN = 0
 var bool wasUp = false
@@ -171,26 +182,20 @@ if barstate.isconfirmed
             slP := entryP - riskP
         tp1P = entryP + tp1R * riskP
         tp2P = entryP + tp2R * riskP
-        if array.size(tEntry) >= 12
-            line.delete(array.get(tEntry, 0))
+        if array.size(tTrend) >= 12
+            line.delete(array.get(tTrend, 0))
             line.delete(array.get(tSL, 0))
             line.delete(array.get(tTP1, 0))
             line.delete(array.get(tTP2, 0))
-            box.delete(array.get(tPBox, 0))
-            box.delete(array.get(tRBox, 0))
-            array.remove(tEntry, 0)
+            array.remove(tTrend, 0)
             array.remove(tSL, 0)
             array.remove(tTP1, 0)
             array.remove(tTP2, 0)
-            array.remove(tPBox, 0)
-            array.remove(tRBox, 0)
         ext = bar_index + 34
-        array.push(tEntry, line.new(bar_index, entryP, ext, entryP, color = color.new(color.blue, 0), width = 2))
+        array.push(tTrend, line.new(bar_index - pbBars + 1, pullLo, bar_index, entryP, color = color.new(ghostUp, 15), width = 2, extend = extend.right))
         array.push(tSL, line.new(bar_index, slP, ext, slP, color = color.new(color.red, 0), width = 2, style = line.style_dashed))
         array.push(tTP1, line.new(bar_index, tp1P, ext, tp1P, color = color.new(color.green, 35), width = 1))
         array.push(tTP2, line.new(bar_index, tp2P, ext, tp2P, color = color.new(color.green, 0), width = 2))
-        array.push(tPBox, box.new(bar_index, math.max(entryP, tp2P), ext, math.min(entryP, tp2P), bgcolor = color.new(color.green, 84), border_color = color.new(color.green, 45)))
-        array.push(tRBox, box.new(bar_index, math.max(entryP, slP), ext, math.min(entryP, slP), bgcolor = color.new(color.red, 82), border_color = color.new(color.red, 50)))
         array.push(sigLbls, label.new(bar_index, low, "▲ LONG · FLOW\nE " + str.tostring(entryP, "#.##") + "\nSL " + str.tostring(slP, "#.##") + "\nTP1 " + str.tostring(tp1P, "#.##") + "\nTP2 " + str.tostring(tp2P, "#.##"), style = label.style_label_up, color = color.new(ghostUp, 10), textcolor = color.white, size = size.small))
         if array.size(sigLbls) > 40
             label.delete(array.get(sigLbls, 0))
@@ -207,26 +212,20 @@ if barstate.isconfirmed
             slP := entryP + riskP
         tp1P = entryP - tp1R * riskP
         tp2P = entryP - tp2R * riskP
-        if array.size(tEntry) >= 12
-            line.delete(array.get(tEntry, 0))
+        if array.size(tTrend) >= 12
+            line.delete(array.get(tTrend, 0))
             line.delete(array.get(tSL, 0))
             line.delete(array.get(tTP1, 0))
             line.delete(array.get(tTP2, 0))
-            box.delete(array.get(tPBox, 0))
-            box.delete(array.get(tRBox, 0))
-            array.remove(tEntry, 0)
+            array.remove(tTrend, 0)
             array.remove(tSL, 0)
             array.remove(tTP1, 0)
             array.remove(tTP2, 0)
-            array.remove(tPBox, 0)
-            array.remove(tRBox, 0)
         ext = bar_index + 34
-        array.push(tEntry, line.new(bar_index, entryP, ext, entryP, color = color.new(color.blue, 0), width = 2))
+        array.push(tTrend, line.new(bar_index - pbBars + 1, pullHi, bar_index, entryP, color = color.new(ghostDn, 15), width = 2, extend = extend.right))
         array.push(tSL, line.new(bar_index, slP, ext, slP, color = color.new(color.red, 0), width = 2, style = line.style_dashed))
         array.push(tTP1, line.new(bar_index, tp1P, ext, tp1P, color = color.new(color.green, 35), width = 1))
         array.push(tTP2, line.new(bar_index, tp2P, ext, tp2P, color = color.new(color.green, 0), width = 2))
-        array.push(tPBox, box.new(bar_index, math.max(entryP, tp2P), ext, math.min(entryP, tp2P), bgcolor = color.new(color.green, 84), border_color = color.new(color.green, 45)))
-        array.push(tRBox, box.new(bar_index, math.max(entryP, slP), ext, math.min(entryP, slP), bgcolor = color.new(color.red, 82), border_color = color.new(color.red, 50)))
         array.push(sigLbls, label.new(bar_index, high, "▼ SHORT · FLOW\nE " + str.tostring(entryP, "#.##") + "\nSL " + str.tostring(slP, "#.##") + "\nTP1 " + str.tostring(tp1P, "#.##") + "\nTP2 " + str.tostring(tp2P, "#.##"), style = label.style_label_down, color = color.new(ghostDn, 10), textcolor = color.white, size = size.small))
         if array.size(sigLbls) > 40
             label.delete(array.get(sigLbls, 0))
@@ -263,10 +262,10 @@ if showPanel and barstate.islast
     table.cell(tb, 2, 1, "1H " + f_dirTxt(t1) + " · 4H " + f_dirTxt(t4), text_color = color.new(color.gray, 25), text_size = size.tiny)
     table.cell(tb, 0, 2, "ghosts", text_color = color.new(color.white, 25), text_size = size.tiny)
     table.cell(tb, 1, 2, str.tostring(array.size(gBodies) + (showLive and not na(liveBody) ? 1 : 0)), text_color = color.new(color.white, 20), text_size = size.tiny)
-    table.cell(tb, 2, 2, htfTf + (showLive ? " · live on" : ""), text_color = color.new(color.gray, 30), text_size = size.tiny)
+    table.cell(tb, 2, 2, ghostTf + (showLive ? " · live on" : "") + " · " + ghostMode, text_color = color.new(color.gray, 30), text_size = size.tiny)
     table.cell(tb, 0, 3, "signals fired", text_color = color.new(color.white, 25), text_size = size.tiny)
     table.cell(tb, 1, 3, str.tostring(sigN), text_color = color.new(color.white, 20), text_size = size.tiny)
-    table.cell(tb, 2, 3, "longs " + (flowUp ? "only" : "blocked") + " · shorts " + (flowDn ? "only" : "blocked"), text_color = color.new(color.gray, 30), text_size = size.tiny)
+    table.cell(tb, 2, 3, "trendline entries · no boxes", text_color = color.new(color.gray, 30), text_size = size.tiny)
     table.cell(tb, 0, 4, "session", text_color = color.new(color.white, 25), text_size = size.tiny)
     table.cell(tb, 1, 4, sessDead ? "dead 21-01" : "live", text_color = sessDead ? color.new(color.red, 10) : color.new(color.green, 10), text_size = size.tiny)
     table.cell(tb, 2, 4, "signals need live session", text_color = color.new(color.gray, 30), text_size = size.tiny)

@@ -78,8 +78,17 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "10.30"
+SYSTEM_VERSION = "10.31"
 SYSTEM_CHANGELOG = {
+    "10.31": [
+        "GHOST v2: ghost candles now AUTO-adapt to any chart \u2014 the 1m "
+        "chart gets 15m ghosts (5m\u219230m, 15m\u21921H, 30m/1H\u21924H, "
+        "4H/D\u2192daily), manual override in settings. Entries are now "
+        "TRENDLINES \u2014 anchored at the pullback extreme through the "
+        "entry, extended right; the profit/risk boxes are removed. "
+        "Members: re-copy GHOST from the website or the v2 parts in the "
+        "INDICATOR topic",
+    ],
     "10.30": [
         "SEVENTH TradingView indicator: GHOST \u2014 buy/sell that follows "
         "the big flow. Longs only when 1H and 4H trends agree up, "

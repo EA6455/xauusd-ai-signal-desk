@@ -78,8 +78,18 @@ _BOOT_T = time.time()             # uptime for the member digest
 
 # The desk announces its own updates to the group (DEVELOP topic): every
 # deployed version posts its changelog there automatically on boot.
-SYSTEM_VERSION = "10.33"
+SYSTEM_VERSION = "10.34"
 SYSTEM_CHANGELOG = {
+    "10.34": [
+        "GHOST v5 \u2014 session-gated alerts and full setups: signals and "
+        "alerts now fire in the THREE sessions only (Asia 00-08, London "
+        "07-16, NY 12-21 UTC \u2014 blocked 21:00-00:00); every setup draws "
+        "a trendline from the pullback extreme through the entry with a "
+        "compact BUY/SELL label carrying entry, SL, TP1 0.75R and TP2 "
+        "1.5R; a small PREDICTION ghost candle projects the live swing "
+        "right of price; cooldown raised to 8 bars \u2014 no spam entries. "
+        "Members: re-copy GHOST",
+    ],
     "10.33": [
         "GHOST v4 \u2014 no more late entries and fixed SL/TP: entries now "
         "fire on the FIRST resumption candle after the pullback (closes "

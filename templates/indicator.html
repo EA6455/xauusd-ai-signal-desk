@@ -220,11 +220,11 @@
     <p style="margin-top:6px"><b style="color:#f43f5e">· FLOW SIGNALS</b> — longs <b>only</b> when 1H and 4H trends agree UP, shorts <b>only</b> when both
        agree DOWN (confirmed HTF bars, no lookahead). Entry = momentum resumption after a pullback: price dips toward the slow EMA, then closes
        — <b>no late entries:</b> the signal fires on the <b>first resumption candle</b> after the pullback (the bar closing beyond the prior
-       bar's extreme — 1–3 bars earlier than an EMA cross; stricter EMA mode optional in settings). <b>Fixed SL/TP:</b> the stop anchors
-       <b>tight at the pullback extreme</b>, so <b>TP1 0.75R / TP2 1.5R</b> sit closer and reachable, with a cooldown against signal spam.
-       <b>Clean chart:</b> signals are simple ▲▼ markers (+ ◆ flow-flip diamonds) and alerts —
-       nothing else is drawn except the ghosts. The trade numbers (entry, SL beyond the recent swing, <b>TP1 0.75R / TP2 1.5R</b>) live in the
-       panel's <b>LAST SIGNAL</b> row. Alerts: FLOW LONG / FLOW SHORT / FLOW turned UP / DOWN.</p>
+       bar's extreme; stricter EMA mode optional in settings). <b>Fixed SL/TP:</b> the stop anchors tight at the pullback extreme, so
+       <b>TP1 0.75R / TP2 1.5R</b> sit closer and reachable. <b>Alerts fire in the THREE SESSIONS ONLY</b> — Asia 00–08 · London 07–16 ·
+       NY 12–21 UTC (blocked 21:00–00:00). Every setup draws a <b>trendline</b> from the pullback extreme through the entry with a compact
+       <b>BUY / SELL label</b> (E · SL · TP1 · TP2), plus a small <b>prediction ghost candle</b> projecting the live swing right of price.
+       <b>No spam:</b> 8-bar cooldown between entries. Alerts: FLOW LONG / FLOW SHORT / FLOW turned UP / DOWN.</p>
     <div class="stats">
       <span class="pill" style="border-color:rgba(20,184,166,.5); color:#5eead4">ghost candles: see the flow you trade</span>
       <span class="pill">1H + 4H must agree · pullback entries</span>
